@@ -73,6 +73,7 @@ from config import (  # noqa: E402  (sys.path tweak above)
     ARTEFACTS_DIR,
     DATA_DIR,
     GLOBAL_SEED,
+    HOME_ROOT,
     KNN_NEIGHBORS,
     LOG_DIR_PREPROCESS,
     LOG_DIR_PROCESS,
@@ -85,6 +86,10 @@ from config import (  # noqa: E402  (sys.path tweak above)
     TRAIN_FRAC,
     VAL_FRAC,
 )
+
+# Directory holding the phesantallphenos_*.csv tables. Derived from HOME_ROOT
+# (a config.py path anchor) so no absolute path to uk_BIOBANK_DATA/ is hardcoded.
+PHESANT_DIR = HOME_ROOT / "uk_BIOBANK_DATA" / "table"
 from utils.logging_utils import dump_json, make_process_logger, make_run_id  # noqa: E402
 from utils.seed import set_global_seeds  # noqa: E402
 
@@ -239,6 +244,65 @@ def compute_split_indices(n_rows: int, seed: int) -> tuple[np.ndarray, np.ndarra
     val_idx = np.sort(perm[n_train:n_train + n_val])
     test_idx = np.sort(perm[n_train + n_val:n_train + n_val + n_test])
     return train_idx, val_idx, test_idx
+
+
+def find_phesant_columns(
+    table_dir: Path, columns: list[str], logger
+) -> dict[str, Path]:
+    """
+    Scan the headers of every ``phesantallphenos_*.csv`` in ``table_dir`` and
+    return a mapping from each requested column name to the file it lives in.
+
+    Only ``nrows=0`` (header-only) reads are performed during the scan — no
+    row-level data values are loaded. The scan stops per column as soon as a
+    match is found; the first file (alphabetical order) that contains the
+    column wins.
+
+    Parameters
+    ----------
+    table_dir:
+        Directory containing the phesantallphenos_*.csv files.
+    columns:
+        List of column names to search for (e.g. ``["21003-0.0", "31-0.0"]``).
+    logger:
+        Active process logger; used to record each match and each miss.
+
+    Returns
+    -------
+    dict mapping column name → Path of the containing file. Columns not found
+    in any file are absent from the returned dict (and a WARNING is logged).
+    """
+    candidates = sorted(table_dir.glob("phesantallphenos_*.csv"))
+    if not candidates:
+        logger.warning(
+            "No phesantallphenos_*.csv files found in %s. "
+            "Age and sex covariates will be unavailable.", table_dir,
+        )
+        return {}
+
+    remaining = set(columns)
+    col_to_file: dict[str, Path] = {}
+
+    for path in candidates:
+        if not remaining:
+            break
+        # Header-only read: nrows=0 loads only the column index.
+        header = set(pd.read_csv(path, nrows=0).columns)
+        for col in list(remaining):
+            if col in header:
+                col_to_file[col] = path
+                remaining.discard(col)
+                logger.info(
+                    "Phesant column '%s' found in: %s", col, path.name
+                )
+
+    for col in remaining:
+        logger.warning(
+            "Phesant column '%s' not found in any phesantallphenos file. "
+            "This covariate will be omitted from residualization.", col,
+        )
+
+    return col_to_file
 
 
 def fit_residualizer(
@@ -409,54 +473,130 @@ def main() -> None:
         residualization_applied = False
         residualization_artefact_path: Path | None = None
         normalisation_method = "z-score"
+        # Tracking variables populated only when --residualize is active.
+        covariate_sources: dict[str, str] = {}   # col → source-file path string
+        age_sex_missing_filled: int = 0           # total missings filled across age+sex
 
-        if args.residualize and cov_df is not None and not cov_df.empty:
-            logger.info("Residualization requested. Encoding covariates.")
-            cov_matrix, cov_feature_names = encode_covariates(cov_df)
-            logger.info(
-                "Covariate matrix encoded: %d rows × %d features. "
-                "Encoded feature names: %s",
-                cov_matrix.shape[0], cov_matrix.shape[1],
-                ", ".join(cov_feature_names) if cov_feature_names else "(none)",
-            )
+        if args.residualize:
+            # ----------------------------------------------------------------
+            # Sub-step 9a: extend covariates with age (21003-0.0) and sex
+            # (31-0.0) sourced from phesantallphenos files.  These two columns
+            # are not present in RAW_PROTEIN_CSV but are critical confounders.
+            # ----------------------------------------------------------------
+            phesant_target_cols = ["21003-0.0", "31-0.0"]
+            col_to_file = find_phesant_columns(PHESANT_DIR, phesant_target_cols, logger)
 
-            cov_train = cov_matrix[train_idx]
-            cov_val = cov_matrix[val_idx]
-            cov_test = cov_matrix[test_idx]
+            for col, source_file in col_to_file.items():
+                # Read only the two columns we need — never load the full table.
+                col_df = pd.read_csv(source_file, usecols=["eid", col])
+                lookup: dict = dict(
+                    zip(col_df["eid"].to_numpy(), col_df[col].to_numpy())
+                )
+                # Align to the protein matrix row order via eid_array.
+                col_array = np.array(
+                    [lookup.get(int(e), np.nan) for e in eid_array],
+                    dtype=np.float64,
+                )
 
-            resid_model = fit_residualizer(x_train_imp, cov_train)
-            logger.info("LinearRegression residualizer fit on TRAIN split only.")
+                n_missing_total = int(np.isnan(col_array).sum())
 
-            x_train_imp = x_train_imp - resid_model.predict(cov_train)
-            x_val_imp = x_val_imp - resid_model.predict(cov_val)
-            x_test_imp = x_test_imp - resid_model.predict(cov_test)
+                # Fill strategy is determined by the column type.
+                # Stats are computed on training rows ONLY to prevent leakage.
+                train_col_vals = col_array[train_idx]
+                if col == "21003-0.0":          # age — fill with training median
+                    fill_method = "training-set median"
+                    fill_val = float(np.nanmedian(train_col_vals))
+                else:                           # sex (31-0.0) — fill with training mode
+                    fill_method = "training-set mode"
+                    non_nan = train_col_vals[~np.isnan(train_col_vals)]
+                    vals, counts = np.unique(non_nan, return_counts=True)
+                    fill_val = float(vals[np.argmax(counts)])
 
-            residualization_artefact_path = (
-                ARTEFACTS_DIR / f"covariate_resid_{args.seed}.npz"
-            )
-            np.savez(
-                residualization_artefact_path,
-                # multi-output LR: coef_.shape == (n_proteins, n_covariates)
-                coefficients=resid_model.coef_,
-                intercepts=resid_model.intercept_,
-                covariate_columns=np.array(list(cov_df.columns), dtype=object),
-                covariate_categories=np.array(
-                    [covariate_matches[c] for c in cov_df.columns], dtype=object,
-                ),
-                encoded_feature_names=np.array(cov_feature_names, dtype=object),
-                feature_names=np.array(feature_names, dtype=object),
-            )
-            logger.info(
-                "Residualization artefact written: %s",
-                residualization_artefact_path,
-            )
-            residualization_applied = True
-            normalisation_method = "covariate-residualized"
-        elif args.residualize:
-            logger.warning(
-                "Residualization flag was set but no usable covariate columns "
-                "were available; falling back to plain z-score normalisation."
-            )
+                if n_missing_total > 0:
+                    logger.warning(
+                        "Column '%s': %d missing values across all rows; "
+                        "filling with %s.", col, n_missing_total, fill_method,
+                    )
+                else:
+                    logger.info("Column '%s': 0 missing values; no fill needed.", col)
+                logger.info("Column '%s' fill strategy applied: %s.", col, fill_method)
+
+                col_array = np.where(np.isnan(col_array), fill_val, col_array)
+                age_sex_missing_filled += n_missing_total
+                covariate_sources[col] = str(source_file)
+
+                # Determine the covariate category label for this column.
+                category = "age" if col == "21003-0.0" else "sex"
+                covariate_matches[col] = category
+                covariate_cols.append(col)
+
+                # Merge the filled array into cov_df.
+                if cov_df is None:
+                    cov_df = pd.DataFrame({col: col_array})
+                else:
+                    cov_df = cov_df.reset_index(drop=True)
+                    cov_df[col] = col_array
+
+            # Record source file for protein-CSV-derived covariates so the
+            # JSON log shows all six covariate column → file mappings.
+            for col in covariate_cols:
+                if col not in covariate_sources:
+                    covariate_sources[col] = str(RAW_PROTEIN_CSV)
+
+            # ----------------------------------------------------------------
+            # Sub-step 9b: encode and fit the full covariate matrix, then
+            # subtract predictions to obtain residuals.
+            # ----------------------------------------------------------------
+            if cov_df is not None and not cov_df.empty:
+                logger.info(
+                    "Residualization: encoding %d covariate columns: %s",
+                    len(cov_df.columns), ", ".join(cov_df.columns),
+                )
+                cov_matrix, cov_feature_names = encode_covariates(cov_df)
+                logger.info(
+                    "Covariate matrix encoded: %d rows × %d features. "
+                    "Encoded feature names: %s",
+                    cov_matrix.shape[0], cov_matrix.shape[1],
+                    ", ".join(cov_feature_names) if cov_feature_names else "(none)",
+                )
+
+                cov_train = cov_matrix[train_idx]
+                cov_val = cov_matrix[val_idx]
+                cov_test = cov_matrix[test_idx]
+
+                resid_model = fit_residualizer(x_train_imp, cov_train)
+                logger.info("LinearRegression residualizer fit on TRAIN split only.")
+
+                x_train_imp = x_train_imp - resid_model.predict(cov_train)
+                x_val_imp = x_val_imp - resid_model.predict(cov_val)
+                x_test_imp = x_test_imp - resid_model.predict(cov_test)
+
+                residualization_artefact_path = (
+                    ARTEFACTS_DIR / f"covariate_resid_{args.seed}.npz"
+                )
+                np.savez(
+                    residualization_artefact_path,
+                    # multi-output LR: coef_.shape == (n_proteins, n_covariates)
+                    coefficients=resid_model.coef_,
+                    intercepts=resid_model.intercept_,
+                    covariate_columns=np.array(list(cov_df.columns), dtype=object),
+                    covariate_categories=np.array(
+                        [covariate_matches[c] for c in cov_df.columns], dtype=object,
+                    ),
+                    encoded_feature_names=np.array(cov_feature_names, dtype=object),
+                    feature_names=np.array(feature_names, dtype=object),
+                )
+                logger.info(
+                    "Residualization artefact written: %s",
+                    residualization_artefact_path,
+                )
+                residualization_applied = True
+                normalisation_method = "covariate-residualized"
+            else:
+                logger.warning(
+                    "Residualization flag was set but no usable covariate "
+                    "columns were available; falling back to plain z-score."
+                )
 
         # Step 10: standardise. Fit on (post-residualization, if any) training
         # rows only.
@@ -531,6 +671,8 @@ def main() -> None:
             "covariate_category_matches": (
                 covariate_matches if residualization_applied else {}
             ),
+            "covariate_sources": covariate_sources if residualization_applied else {},
+            "age_sex_missing_filled": age_sex_missing_filled,
             "knn_neighbors": int(args.knn_neighbors),
             "global_seed": int(GLOBAL_SEED),
             "split_indices_file": str(split_path),
