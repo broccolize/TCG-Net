@@ -1,0 +1,60 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# =============================================================================
+# Data and model files (never committed)
+# Path-specific so non-data CSVs (e.g. per-module READMEs that use code-
+# fenced CSV samples) and unrelated NumPy arrays elsewhere are not affected.
+# =============================================================================
+*.pt
+*.pth
+*.joblib
+*.npz
+*.npy
+
+# Proteomics data + persisted preprocessing artefacts.
+proteomics/data/**/*.csv
+proteomics/data/artefacts/**/*
+
+# Raw UK Biobank inputs (live outside the monorepo; covered defensively).
+uk_BIOBANK_DATA/
+
+# =============================================================================
+# Archive folder — legacy artefacts kept for sanity comparison only.
+# =============================================================================
+_archive/
+
+# =============================================================================
+# Log files — every entry script produces these per-run.
+# =============================================================================
+logs/**/*.log
+logs/**/*.csv
+logs/**/*.json
+
+# =============================================================================
+# Environment / secrets
+# =============================================================================
+.env
+*.env
+venv/
+.venv/
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# IDE
+# =============================================================================
+.vscode/
+.idea/
