@@ -17,6 +17,45 @@ Every entry script in the proteomics pipeline must import from this module
 rather than redefining its own constants.
 """
 
+# ---------------------------------------------------------------------------
+# QUICK-REFERENCE: full pipeline run order (all commands from repo root)
+#
+#   1. Preprocessing — split-aware KNN imputation + z-score (~3 h on CPU):
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/data/preprocess.py
+#      # Optional covariate residualization:
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/data/preprocess.py --residualize
+#
+#   2. Build target datasets:
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/data/build_dataset.py --target age
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/data/build_dataset.py --target fluid_iq
+#
+#   3. Stage 1 training:
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/training/train_stage1.py --target age
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/training/train_stage1.py --target fluid_iq
+#
+#   4. Protein importance analysis (replace <run_id> with actual checkpoint name):
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/analysis/protein_importance.py \
+#        --target age \
+#        --checkpoint TCG-Net/proteomics/checkpoints/stage1_age_<run_id>_best.pt
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/analysis/protein_importance.py \
+#        --target fluid_iq \
+#        --checkpoint TCG-Net/proteomics/checkpoints/stage1_fluid_iq_<run_id>_best.pt
+#
+#   5. K=5 cross-validation (optional):
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/training/cv_stage1.py --target age
+#      conda run --no-capture-output -n tcg_net \
+#        python TCG-Net/proteomics/training/cv_stage1.py --target fluid_iq
+# ---------------------------------------------------------------------------
+
 from pathlib import Path
 
 # ---------------------------------------------------------------------------

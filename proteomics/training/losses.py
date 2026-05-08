@@ -79,6 +79,17 @@ class ProteomicsStage1Loss(nn.Module):
     """
 
     def __init__(self, lambda_sparse: float = LAMBDA_SPARSE) -> None:
+        """
+        Initialise the Stage 1 loss with a configurable sparsity coefficient.
+
+        Parameters
+        ----------
+        lambda_sparse : float
+            Multiplier applied to the ``||s_p||_1`` term before adding it
+            to the MSE.  Defaults to ``LAMBDA_SPARSE`` (1e-4) from
+            ``config.py``.  Setting this to 0 disables sparsity entirely,
+            reducing the loss to plain MSE(y, y_p).
+        """
         super().__init__()
         self.lambda_sparse = lambda_sparse
         # reduction="mean" averages over all elements in the batch, which

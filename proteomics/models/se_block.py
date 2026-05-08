@@ -59,6 +59,19 @@ class SEBlock(nn.Module):
     """
 
     def __init__(self, in_dim: int = 1024, reduction_dim: int = 256) -> None:
+        """
+        Initialise SE block layers.
+
+        Parameters
+        ----------
+        in_dim : int
+            Width of the input (and output) hidden representation.
+            Must match the first hidden block width of ``ProteomicsEncoder``
+            (default 1024 = ``HIDDEN_DIM_1``).
+        reduction_dim : int
+            Bottleneck width between W1 and W2
+            (default 256 = ``SE_REDUCTION_DIM``).
+        """
         super().__init__()
         # W1: squeeze hidden representation down to a bottleneck.
         self.W1 = nn.Linear(in_dim, reduction_dim, bias=True)

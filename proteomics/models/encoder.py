@@ -99,6 +99,14 @@ class ProteomicsEncoder(nn.Module):
         dropout_2: float = DROPOUT_2,
         dropout_3: float = DROPOUT_3,
     ) -> None:
+        """
+        Initialise all encoder sub-modules with the specified dimensions.
+
+        Parameters mirror the class-level Parameters section above.
+        All defaults are imported from ``config.py`` so no numbers are
+        hardcoded here.  The resulting forward pass maps
+        ``(B, input_dim) → (z_p: B×embed_dim, s_p: B×hidden_dim_1)``.
+        """
         super().__init__()
 
         # Stage 1: project raw proteins to the 1024-d hidden space.

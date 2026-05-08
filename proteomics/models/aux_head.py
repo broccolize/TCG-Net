@@ -73,6 +73,18 @@ class ProteomicsAuxHead(nn.Module):
         embed_dim: int = EMBED_DIM,
         out_dim: int = AUX_HEAD_OUT_DIM,
     ) -> None:
+        """
+        Initialise the single fully-connected regression layer.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Input width; must equal ``ProteomicsEncoder`` output width
+            (default 128 = ``EMBED_DIM``).
+        out_dim : int
+            Output width; 1 for scalar regression targets such as age or
+            fluid IQ (default 1 = ``AUX_HEAD_OUT_DIM``).
+        """
         super().__init__()
         # One linear layer: z_p (B, 128) → y_p (B, 1).
         # No activation — this is a regression head, not a classifier.

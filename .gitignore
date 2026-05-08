@@ -24,6 +24,10 @@ build/
 proteomics/data/**/*.csv
 proteomics/data/artefacts/**/*
 
+# Proteomics checkpoints and logs (path-anchored so only these dirs are matched).
+proteomics/checkpoints/
+proteomics/logs/
+
 # Raw UK Biobank inputs (live outside the monorepo; covered defensively).
 uk_BIOBANK_DATA/
 
