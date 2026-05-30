@@ -2,6 +2,7 @@ from dataclasses import dataclass # for FusionOutput
 import torch
 import torch.nn as nn
 import torch.nn.functional as F # this is for softmax()
+from prediction_head import PredictionHead
 
 @dataclass
 class FusionOutput:
@@ -62,6 +63,32 @@ class CooperativeShapleyFusion(nn.Module):
             z_fusion = z_fusion, # 4.3
             w = w,
 
+
+
         )
 
 
+if __name__ == "__main__":
+    B = 8
+    z_f = torch.randn(B, 128)
+    z_p = torch.randn(B, 128)
+
+    model = CooperativeShapleyFusion()
+    model.set_baseline(6.5)
+    head = PredictionHead()
+
+    out = model(z_f, z_p)
+
+    assert out.y_hat_f.shape  == (B,),     f"y_hat_f: {out.y_hat_f.shape}"
+    assert out.y_hat_p.shape  == (B,),     f"y_hat_p: {out.y_hat_p.shape}"
+    assert out.y_hat_fp.shape == (B,),     f"y_hat_fp: {out.y_hat_fp.shape}"
+    assert out.phi_f.shape    == (B,),     f"phi_f: {out.phi_f.shape}"
+    assert out.phi_p.shape    == (B,),     f"phi_p: {out.phi_p.shape}"
+    assert out.phi_int.shape  == (B,),     f"phi_int: {out.phi_int.shape}"
+    assert out.z_fusion.shape == (B, 128), f"z_fusion: {out.z_fusion.shape}"
+    assert out.w.shape        == (B, 3),   f"w: {out.w.shape}"
+
+    y_hat = head(out.z_fusion)
+    assert y_hat.shape == (B,), f"y_hat: {y_hat.shape}"
+
+    print("All shapes OK — Session 1 complete")
