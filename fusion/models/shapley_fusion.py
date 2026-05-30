@@ -26,6 +26,10 @@ class CooperativeShapleyFusion(nn.Module):
         self.H_fp = nn.Sequential(nn.Linear(embed_dim*4, joint_hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(joint_hidden, 1) )
 
         self.register_buffer('y_baseline', torch.tensor(0.0))
+        self.W_f = nn.Linear(embed_dim, embed_dim, bias = False)
+        self.W_p = nn.Linear(embed_dim, embed_dim, bias = False)
+        self.W_int = nn.Linear(embed_dim, embed_dim, bias = False)
+
 
     def set_baseline(self, y_mean: float):
         self.y_baseline.fill_(y_mean)
@@ -40,6 +44,14 @@ class CooperativeShapleyFusion(nn.Module):
         phi_f = 0.5 * ((y_hat_f - self.y_baseline) + (y_hat_fp - y_hat_p))
         phi_p = 0.5 * ((y_hat_p - self.y_baseline) + (y_hat_fp - y_hat_f))
         phi_int = y_hat_fp - self.y_baseline - phi_f - phi_p
+
+        w = F.softmax(torch.stack([phi_f, phi_p, phi_int], dim = 1), dim = 1)
+        w_f, w_p, w_int = w[:, 0:1], w[:, 1:2], w[:, 2:3]
+        z_prime_f = self.W_f(z_f)
+        z_prime_p = self.W_p(z_p)
+        z_prime_int = self.W_int(z_f * z_p)
+        z_fusion = w_f * z_prime_f  +  w_p * z_prime_p  +  w_int * z_prime_int
+
         return FusionOutput(
             y_hat_f = y_hat_f,
             y_hat_p = y_hat_p,
@@ -47,8 +59,8 @@ class CooperativeShapleyFusion(nn.Module):
             phi_f = phi_f, # 4.2
             phi_p = phi_p,
             phi_int = phi_int,
-            z_fusion = None, # 4.3
-            w = None,
+            z_fusion = z_fusion, # 4.3
+            w = w,
 
         )
 
