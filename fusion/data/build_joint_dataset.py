@@ -4,7 +4,7 @@ Build the joint proteomics–fMRI dataset for TCG-Net Stage 2.
 Pipeline (executed in this exact order):
 
     1. Load proteomics EIDs from proteomics_tensor.pt.
-    2. Load fMRI EIDs and FC feature matrix from Y68p_FC_2_0.csv.
+    2. Load fMRI EIDs and FC feature matrix from corr_matrix.mat.
     3. Compute EID intersection (proteomics ∩ fMRI).  Log N_proteomics,
        N_fmri, N_joint (shapes and counts only — no raw values).
     4. Align both tensors row-by-row on the intersected EIDs.  The
@@ -31,8 +31,8 @@ CRITICAL DATA PROTECTION
   aggregate statistics (mean, std) only.
 - Proteomics tensor is read-only; no writes to proteomics/ or to
   uk_BIOBANK_DATA/ at any point.
-- All paths are derived from config.py constants (REPO_ROOT, HOME_ROOT,
-  ARTEFACTS_DIR, SHARED_DATA_DIR).  Nothing is hardcoded.
+- Shared data paths are hardcoded strings. Proteomics paths derive from
+  proteomics/config.py constants (REPO_ROOT, HOME_ROOT, ARTEFACTS_DIR).
 """
 
 from __future__ import annotations
@@ -42,17 +42,14 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-import importlib.util as _ilu
-
 import joblib
 import numpy as np
 import pandas as pd
+import scipy.io as sio
 import torch
 
 # ---------------------------------------------------------------------------
 # Path bootstrap — make the proteomics package importable from any CWD.
-# fusion/config.py is loaded via importlib to avoid a name collision with
-# proteomics/config.py (both files are named config.py).
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent.parent
@@ -60,11 +57,7 @@ _PROTEOMICS_PKG = _REPO_ROOT / "proteomics"
 if str(_PROTEOMICS_PKG) not in sys.path:
     sys.path.insert(0, str(_PROTEOMICS_PKG))
 
-_FUSION_PKG = _REPO_ROOT / "fusion"
-_spec = _ilu.spec_from_file_location("fusion.config", _FUSION_PKG / "config.py")
-_fusion_cfg = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_fusion_cfg)
-SHARED_DATA_DIR = _fusion_cfg.SHARED_DATA_DIR
+SHARED_DATA_DIR = Path("/shared/tcgnet_data")
 
 from config import (  # noqa: E402  (proteomics/config.py)
     ARTEFACTS_DIR,
@@ -87,9 +80,7 @@ FUSION_LOG_PROCESS = REPO_ROOT / "fusion" / "logs" / "process"
 
 SCALER_PATH = ARTEFACTS_DIR / f"scaler_{SPLIT_SEED}.joblib"
 
-FMRI_FC_CSV = (
-    HOME_ROOT / "uk_BIOBANK_DATA" / "imaging" / "fMRI" / "FC" / "Y68p_FC_2_0.csv"
-)
+CORR_MATRIX_PATH = Path("/shared/tcgnet_data/corr_matrix.mat")
 PHESANT_DIR = HOME_ROOT / "uk_BIOBANK_DATA" / "table"
 
 # Input: proteomics_tensor.pt has been moved to the shared data directory.
@@ -235,7 +226,7 @@ def main() -> None:
         logger.info("run_id: %s", run_id)
         logger.info("GLOBAL_SEED=%d, SPLIT_SEED=%d", GLOBAL_SEED, SPLIT_SEED)
         logger.info("Proteomics tensor: %s", PROCESSED_TENSOR_PATH)
-        logger.info("fMRI FC CSV: %s", FMRI_FC_CSV)
+        logger.info("fMRI corr_matrix: %s", CORR_MATRIX_PATH)
         logger.info("Scaler artefact: %s", SCALER_PATH)
         logger.info("Output dir (shared): %s", SHARED_DATA_DIR)
         logger.info("Process log: %s", log_path)
@@ -275,27 +266,21 @@ def main() -> None:
         _ = scaler  # retained for audit; not called on x_p_full
 
         # ------------------------------------------------------------------
-        # Step 2: Load fMRI EIDs and FC feature matrix.
-        # Y68p_FC_2_0.csv: columns = [eid, v1, ..., v3486].
-        # Only the eid column is read first to build the EID set cheaply;
-        # the full matrix is read in a single pass below.
+        # Step 2: Load fMRI EIDs and FC feature matrix from corr_matrix.mat.
+        # FC_Matrices: (40517, 66, 66); upper triangle (k=1) → 2145 features.
+        # Patient_IDs: (40517,) EID array.
         # ------------------------------------------------------------------
-        if not FMRI_FC_CSV.exists():
-            raise FileNotFoundError(f"fMRI FC CSV not found: {FMRI_FC_CSV}")
+        if not CORR_MATRIX_PATH.exists():
+            raise FileNotFoundError(f"corr_matrix.mat not found: {CORR_MATRIX_PATH}")
 
-        fmri_header = list(pd.read_csv(FMRI_FC_CSV, nrows=0).columns)
-        n_fmri_features = len(fmri_header) - 1  # subtract eid column
+        mat = sio.loadmat(str(CORR_MATRIX_PATH))
+        fc_all = mat['FC_Matrices']                                     # (40517, 66, 66)
+        fc_ids = np.array(mat['Patient_IDs']).squeeze().astype(np.int64)
+        eid_f = fc_ids
+        n_fmri_features = 66 * 65 // 2  # 2145
         logger.info(
-            "fMRI FC CSV header: %d feature columns (plus eid).",
-            n_fmri_features,
-        )
-
-        fmri_df = pd.read_csv(FMRI_FC_CSV, dtype={fmri_header[0]: np.int64})
-        eid_f = fmri_df["eid"].to_numpy(dtype=np.int64)
-        x_f_full = fmri_df.drop(columns=["eid"]).to_numpy(dtype=np.float32)
-        logger.info(
-            "fMRI FC matrix loaded: x_f.shape=%s, N_fmri=%d.",
-            tuple(x_f_full.shape), eid_f.size,
+            "corr_matrix.mat loaded: FC_Matrices.shape=%s, N_fmri=%d, n_fmri_features=%d.",
+            tuple(fc_all.shape), eid_f.size, n_fmri_features,
         )
 
         # ------------------------------------------------------------------
@@ -335,15 +320,15 @@ def main() -> None:
                 f"got {joint_eids.size}.  Duplicate EIDs in proteomics tensor?"
             )
 
-        # Align fMRI rows to the canonical joint order.
-        fmri_eid_to_row: dict[int, int] = {int(e): i for i, e in enumerate(eid_f)}
-        if len(fmri_eid_to_row) != eid_f.size:
+        # Align fMRI rows to the canonical joint order and extract upper triangle.
+        eid_to_idx: dict[int, int] = {int(e): i for i, e in enumerate(fc_ids)}
+        if len(eid_to_idx) != fc_ids.size:
             raise RuntimeError(
-                "Duplicate EIDs detected in the fMRI FC CSV — cannot align."
+                "Duplicate EIDs detected in corr_matrix.mat — cannot align."
             )
         try:
             fmri_row_indices = np.array(
-                [fmri_eid_to_row[int(e)] for e in joint_eids], dtype=np.int64
+                [eid_to_idx[int(e)] for e in joint_eids], dtype=np.int64
             )
         except KeyError as exc:
             raise RuntimeError(
@@ -351,8 +336,10 @@ def main() -> None:
                 f"fMRI lookup — data integrity error."
             ) from exc
 
+        tri_i, tri_j = np.triu_indices(66, k=1)
+        fc_sub = fc_all[fmri_row_indices].astype(np.float32)        # (N_joint, 66, 66)
         x_p_joint = x_p_full[torch.from_numpy(joint_positions_p)]  # (N_joint, 2920)
-        x_f_joint = torch.from_numpy(x_f_full[fmri_row_indices])   # (N_joint, 3486)
+        x_f_joint = torch.from_numpy(fc_sub[:, tri_i, tri_j])      # (N_joint, 2145)
 
         logger.info(
             "Aligned joint tensors: x_p.shape=%s, x_f.shape=%s.",
@@ -459,7 +446,7 @@ def main() -> None:
                     "test_idx": torch.from_numpy(target_test_idx),
                     "y_0": y_0,
                     "scaler_path": str(SCALER_PATH),
-                    "fmri_fc_csv": str(FMRI_FC_CSV),
+                    "fmri_source": str(CORR_MATRIX_PATH),
                     "n_fmri_features": n_fmri_features,
                     "split_seed": SPLIT_SEED,
                 },
@@ -511,7 +498,7 @@ def main() -> None:
             "split_seed": SPLIT_SEED,
             "proteomics_tensor": str(PROCESSED_TENSOR_PATH),
             "scaler_artefact": str(SCALER_PATH),
-            "fmri_fc_csv": str(FMRI_FC_CSV),
+            "fmri_source": str(CORR_MATRIX_PATH),
             "n_proteomics": int(eid_p.size),
             "n_fmri": int(eid_f.size),
             "n_joint": n_joint,
