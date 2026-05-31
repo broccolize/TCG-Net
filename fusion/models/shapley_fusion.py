@@ -2,7 +2,7 @@ from dataclasses import dataclass # for FusionOutput
 import torch
 import torch.nn as nn
 import torch.nn.functional as F # this is for softmax()
-from prediction_head import PredictionHead
+from .prediction_head import PredictionHead
 
 @dataclass
 class FusionOutput:

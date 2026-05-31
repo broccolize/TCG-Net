@@ -1,2 +1,2 @@
-from models.shapley_fusion import FusionOutput, CooperativeShapleyFusion
-from models.prediction_head import PredictionHead
+from .shapley_fusion import FusionOutput, CooperativeShapleyFusion
+from .prediction_head import PredictionHead

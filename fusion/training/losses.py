@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.shapley_fusion import FusionOutput
+from fusion.models.shapley_fusion import FusionOutput
 
 class Stage2Loss(nn.Module):
     def __init__(self, lambda_aux: float = 0.3, lambda_shapley: float = 0.1, lambda_sparse: float = 1e-4 ):
