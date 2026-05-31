@@ -19,22 +19,27 @@ class Stage2Loss(nn.Module):
        l_aux = F.mse_loss(fusion.y_hat_f, y_true) + F.mse_loss(fusion.y_hat_p, y_true) + F.mse_loss(fusion.y_hat_fp, y_true)
        l_shapley = (fusion.y_hat_fp - (fusion.phi_f + fusion.phi_p + fusion.phi_int + y0)).pow(2).mean()
        
-       w_l1 = fusion.w.abs().mean()
-       sp_l1 = s_p.abs().mean()
+       sp_l1 = s_p.abs().mean()   # logged for monitoring; not in l_sparse (suppresses SE gate)
        af_l1 = alpha_f.abs().mean()
 
-       l_sparse = w_l1 + sp_l1 + af_l1
+       # DEVIATION from §6.4: uses .mean() not .sum() for size-invariance across tensors
+       # of different shapes (w[B,3], s_p[B,1024], alpha_f[E,heads]).
+       # w and sp_l1 removed (Session 3): w has zero gradient (softmax constant); sp_l1
+       # suppresses SE gate toward 0, counterproductive for interpretability.
+       l_sparse = af_l1
        l_total = l_main + self.lambda_aux * l_aux + self.lambda_shapley * l_shapley + self.lambda_sparse * l_sparse
 
        return {
-        "total":      l_total,    # call .backward() on this
+        "total":      l_total,
         "l_main":     l_main,
         "l_aux":      l_aux,
-        "l_shapley":  l_shapley,
+        "l_shapley":  l_shapley,   # always 0 by construction (efficiency identity)
         "l_sparse":   l_sparse,
-        "w_l1":       w_l1,       # for logging
-        "sp_l1":      sp_l1,      # for logging
-        "af_l1":      af_l1,      # for logging
+        "w_f":        fusion.w[:, 0].mean(),   # mean fMRI weight across batch
+        "w_p":        fusion.w[:, 1].mean(),   # mean proteomics weight
+        "w_int":      fusion.w[:, 2].mean(),   # mean interaction weight
+        "sp_l1":      sp_l1,
+        "af_l1":      af_l1,
     }
 
 
