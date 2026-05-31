@@ -2,7 +2,7 @@ from dataclasses import dataclass # for FusionOutput
 import torch
 import torch.nn as nn
 import torch.nn.functional as F # this is for softmax()
-from prediction_head import PredictionHead
+from .prediction_head import PredictionHead
 
 @dataclass
 class FusionOutput:
@@ -19,17 +19,18 @@ class FusionOutput:
     w: torch.Tensor # [B, 3]
 
 class CooperativeShapleyFusion(nn.Module):
-    def __init__(self, embed_dim: int = 128, joint_hidden: int = 256, dropout: float = 0.2):
+    def __init__(self, embed_dim: int = 128, joint_hidden: int = 256, dropout: float = 0.2,
+                 temperature: float = 0.1):
         super().__init__()
-        self.H_f = nn.Linear(embed_dim, 1) #128 feature 1 output -> 1 subject
+        self.H_f = nn.Linear(embed_dim, 1)
         self.H_p = nn.Linear(embed_dim, 1)
-        # this is just the architecture, the real zjoint is compute later
-        self.H_fp = nn.Sequential(nn.Linear(embed_dim*4, joint_hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(joint_hidden, 1) )
+        self.H_fp = nn.Sequential(nn.Linear(embed_dim*4, joint_hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(joint_hidden, 1))
 
         self.register_buffer('y_baseline', torch.tensor(0.0))
-        self.W_f = nn.Linear(embed_dim, embed_dim, bias = False)
-        self.W_p = nn.Linear(embed_dim, embed_dim, bias = False)
-        self.W_int = nn.Linear(embed_dim, embed_dim, bias = False)
+        self.register_buffer('temperature', torch.tensor(temperature))
+        self.W_f = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.W_p = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.W_int = nn.Linear(embed_dim, embed_dim, bias=False)
 
 
     def set_baseline(self, y_mean: float):
@@ -46,7 +47,9 @@ class CooperativeShapleyFusion(nn.Module):
         phi_p = 0.5 * ((y_hat_p - self.y_baseline) + (y_hat_fp - y_hat_f))
         phi_int = y_hat_fp - self.y_baseline - phi_f - phi_p
 
-        w = F.softmax(torch.stack([phi_f, phi_p, phi_int], dim = 1), dim = 1)
+        # DEVIATION from §4.3: temperature scaling (T=0.1) added to prevent gate collapse
+        # to uniform [1/3,1/3,1/3] when Shapley values are small. Not in PDF spec.
+        w = F.softmax(torch.stack([phi_f, phi_p, phi_int], dim=1) / self.temperature, dim=1)
         w_f, w_p, w_int = w[:, 0:1], w[:, 1:2], w[:, 2:3]
         z_prime_f = self.W_f(z_f)
         z_prime_p = self.W_p(z_p)
