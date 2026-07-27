@@ -21,7 +21,6 @@ to Data/fmri_graph_features_fold{k}.npz. Delete fold caches if the source FC dat
 """
 
 import json
-import os
 from pathlib import Path
 
 import networkx as nx
@@ -275,18 +274,21 @@ def compute_graph_features(fc_matrices: np.ndarray, train_idx: np.ndarray,
                                where=(sub_d > 0) & ~np.isinf(sub_d))
             local_eff[:, i] = inv_d.sum(axis=(1, 2)) / (n_nbrs * (n_nbrs - 1))
 
-        # 6. Within-module degree z-score — how a node's strength compares to
-        # other nodes in the same module. High values indicate intra-module hubs.
+        # 6. Within-module degree z-score (Guimerà & Amaral 2005) — z-score of
+        # each node's strength to nodes in its OWN module, measured against the
+        # other nodes in that module. High values indicate intra-module hubs.
+        # (Previously this z-scored total strength, which mislabeled the metric
+        # and made it largely redundant with feature 1.)
         within_z = np.zeros((C, N_ROI), dtype=np.float64)
         for m in np.unique(module_labels):
             idx_m = module_labels == m
             if idx_m.sum() < 2:                                  # need ≥2 nodes in module
                 continue
-            k_m   = strength[:, idx_m]
-            std_m = k_m.std(axis=1, keepdims=True)
+            k_in_m = A[:, :, idx_m].sum(axis=2)                 # [C, |m|] within-module strength
+            std_m  = k_in_m.std(axis=1, keepdims=True)
             within_z[:, idx_m] = np.where(
                 std_m > 0,
-                (k_m - k_m.mean(axis=1, keepdims=True)) / (std_m + eps),
+                (k_in_m - k_in_m.mean(axis=1, keepdims=True)) / (std_m + eps),
                 0.0,
             )
 

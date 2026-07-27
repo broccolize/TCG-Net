@@ -23,8 +23,8 @@ Goal: predict **fluid intelligence** from fMRI data alone using the GCN-GAT enco
 
 ## Step 1 — fMRI Data Preprocessing
 
-- Compute Pearson correlation from BOLD time-series `[T, R]` per subject
-- Zero the diagonal, clip to ±0.999999, apply Fisher-z transform (`arctanh`)
+- `FC_corr.py`: compute Pearson correlation from BOLD time-series `[T, R]` per subject, align 68→66 to the sMRI ROI order, zero the diagonal → saves **raw Pearson** FC to `corr_matrix.mat`
+- Training scripts: clip to ±0.999999, apply Fisher-z transform (`arctanh`) at dataset construction
 - Result: one `[R, R]` FC matrix per subject
 - **All preprocessing fit on training indices only — no leakage into val/test**
 
@@ -52,7 +52,7 @@ $$A_i^+ = \max(A_i,\ 0)$$
 $$A_i^- = |\min(A_i,\ 0)|$$
 - Split FC by sign into two separate adjacency matrices
 - Two separate GCN-GAT encoders run in parallel (one per channel)
-- Outputs concatenated: `[B, 128]` + `[B, 128]` → `[B, 256]` before prediction head
+- Outputs concatenated: `[B, 128]` + `[B, 128]` → `[B, 256]`, then a `Linear(256→128)` fusion projection back to 128 for Stage-2 API compatibility
 - Most biologically motivated: treats excitatory and inhibitory FC as distinct signals
 
 ### Comparison
@@ -73,7 +73,7 @@ For each subject, each ROI node gets a feature vector `[D = R + 6]`:
 - FC profile row (R values — connectivity to all other ROIs)
 - 6 graph-theoretic metrics: nodal strength, weighted clustering coefficient, betweenness centrality, local efficiency, participation coefficient, within-module degree
 
-Last two require a community partition — compute once from group-mean FC on training subjects via Louvain. Use `bctpy` for participation coefficient and within-module degree.
+Last two require a community partition — compute once from group-mean FC on training subjects via Louvain (networkx, seeded). All six metrics are implemented in batched numpy — no `bctpy` dependency.
 
 ---
 
@@ -102,20 +102,20 @@ Key details:
 
 ## Step 6 — Prediction Head
 
-`Linear(128, 64) → GELU → Dropout(0.2) → Linear(64, 32) → GELU → Linear(32, 1)`
+`Linear(128, 64) → GELU → Dropout(0.5) → Linear(64, 32) → GELU → Linear(32, 1)`
 
-For Alt 2 the input dim is 256 instead of 128.
+For Alt 2 the head input dim stays 128 — the encoder fuses the two channels back to 128 internally.
 
 ---
 
 ## Step 7 — Training
 
 - Loss: `F.huber_loss` (delta = 1.0)
-- Optimizer: `AdamW(lr=1e-3, weight_decay=1e-4)`
+- Optimizer: `AdamW(lr=5e-4, weight_decay=1e-3)` (tuned down from 1e-3/1e-4 — stronger L2 against overfitting)
 - Gradient clipping: 1.0 globally
-- Early stopping on val MAE, patience ~10
+- Early stopping on val MAE, patience 30
 - ~50–100 epochs
-- Save best checkpoint: `ckpt/fmri_pretrained.pt`
+- Save best checkpoint: `Data/fmri_stage1_encoder.pt` (best fold), plus per-fold `Data/fmri_stage1_encoder_fold{k}.pt`; Alt 1/2 use `_alt1` / `_alt2` suffixes
 
 ---
 

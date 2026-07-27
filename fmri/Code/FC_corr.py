@@ -260,7 +260,7 @@ def run(fmri_path, save_path, smri_csv_path, roi_report_path):
     write_roi_alignment_report(roi_report_path, smri_roi_order, perm)
 
     # ------------------------------------------------------------------
-    _section('[Step 3/5] Stream subjects, compute FC, permute, threshold')
+    _section('[Step 3/5] Stream subjects, compute FC, permute, zero diagonal')
     fmri_by_id = {}
     n_skipped = 0
 
@@ -294,6 +294,12 @@ def run(fmri_path, save_path, smri_csv_path, roi_report_path):
 
     print(f'  Decoded {len(fmri_by_id)} unique fMRI subjects '
           f'(skipped {n_skipped})')
+    if n_skipped > 0.05 * n_subjects:
+        raise RuntimeError(
+            f'Skipped {n_skipped}/{n_subjects} subjects (>5%) — likely a '
+            'systematic decode problem; aborting rather than writing a '
+            'silently truncated FC file.'
+        )
 
     # ------------------------------------------------------------------
     _section('[Step 4/5] Filter & reorder to sMRI eid set')
