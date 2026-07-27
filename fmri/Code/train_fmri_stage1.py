@@ -284,7 +284,9 @@ def compute_graph_features(fc_matrices: np.ndarray, train_idx: np.ndarray,
             idx_m = module_labels == m
             if idx_m.sum() < 2:                                  # need ≥2 nodes in module
                 continue
-            k_in_m = A[:, :, idx_m].sum(axis=2)                 # [C, |m|] within-module strength
+            # A[:, :, idx_m].sum(axis=2) is [C, R] (every node's strength to
+            # module m) — select module-m nodes with [:, idx_m] to get [C, |m|]
+            k_in_m = A[:, :, idx_m].sum(axis=2)[:, idx_m]       # [C, |m|] within-module strength
             std_m  = k_in_m.std(axis=1, keepdims=True)
             within_z[:, idx_m] = np.where(
                 std_m > 0,

@@ -256,7 +256,7 @@ def compute_graph_features(fc_matrices: np.ndarray, train_idx: np.ndarray,
             idx_m = module_labels == m
             if idx_m.sum() < 2:
                 continue
-            k_in_m = A[:, :, idx_m].sum(axis=2)                 # [C, |m|] within-module strength
+            k_in_m = A[:, :, idx_m].sum(axis=2)[:, idx_m]       # [C, |m|] within-module strength
             std_m  = k_in_m.std(axis=1, keepdims=True)
             within_z[:, idx_m] = np.where(
                 std_m > 0,
