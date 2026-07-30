@@ -38,6 +38,56 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Joint targets → instance 2; fluid IQ joint cohort 1,754 → 4,950
+
+Measured coverage over the 5,328 joint participants and over the 52,697
+proteomics participants:
+
+| column | joint cohort | proteomics Stage-1 cohort |
+|---|---|---|
+| `21003-0.0` | 5,328 (100.0%) | 52,697 |
+| `21003-2.0` | 5,328 (100.0%) | — |
+| `20016-0.0` | 1,754 (32.9%) | **16,903** |
+| `20016-2.0` | **4,950 (92.9%)** | 6,289 |
+
+### Decision: instance 2 for the joint dataset, instance 0 for proteomics Stage 1
+
+This refines FIX_PLAN item 4, which originally lumped both stages together. That
+was wrong — the correct instance differs by stage, because the two modalities were
+collected years apart.
+
+**`fusion/data/build_joint_dataset.py` → instance 2.** The connectomes are from
+the imaging visit and the fMRI encoder was pretrained on `20016-2.0`. Instance 0
+meant supervising on a cognitive test taken ~9 years before the scan, and for age
+on recruitment age, which trails the scan by 8.99 ± 1.79 years. It is also a
+**2.82× data win** for fluid IQ: Stage-2 training goes 1,244 → ~3,465 and test
+249 → ~742.
+
+**`proteomics/data/build_dataset.py` → stays instance 0.** The Olink panel was run
+on BASELINE samples (`UKB_Protein_BL_withCov.csv`), so instance-0 cognition is
+contemporaneous with the blood draw. Instance 2 would also cut the pretraining
+cohort to 6,289 — of which 4,950 are already in the joint cohort, so pretraining
+would add almost nothing over Stage 2 itself. After exclusion that is ~3,400
+training rows, and this model already overfits badly at 11,800.
+
+Net design: each encoder is pretrained against the measurement matching its own
+modality's collection date; the joint model is supervised on the imaging visit.
+Both files now carry a comment explaining why they deliberately disagree, since
+"aligning" them looks like an obvious cleanup and would silently break one stage
+or the other. Worth a sentence in the methods.
+
+Tonight's Stage-1 tuning (wd=1e-1) is unaffected — the proteomics dataset does not
+change.
+
+### Consequence
+
+`dataset_joint_age.pt`, `dataset_joint_fluid_iq.pt`, `split_joint_1234.npz` and
+`stage1_exclude_eids_1234.npy` must all be rebuilt. The exclusion list **will**
+change this time: the joint split is unchanged (5,328, same seed), but the
+per-target datasets are not.
+
+---
+
 ## 2026-07-30 — Fluid IQ tuning settled: **wd=1e-1, test R² 0.113 ± 0.005**
 
 Second sweep with `--epochs 100`. The optimum is now bracketed on both sides.

@@ -17,8 +17,8 @@ wastes hours of compute.
 | 1 | `phi_int` → real 2-way interaction index; `l_shapley` redefined to avoid the `phi_int²` trap | `fusion/models/shapley_fusion.py:48`, `fusion/training/losses.py:20` | yes | ✅ **done 2026-07-30** |
 | 2 | Retrain proteomics Stage 1 — current artefact is an epoch-1, `val_r2=0.047` fluid-IQ checkpoint feeding **both** Stage-2 runs | `proteomics/training/train_stage1.py` | yes | ⬜ code ready, **retrain pending** |
 | 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ✅ **done 2026-07-30** |
-| 4 | Targets → instance 2 (`21003-2.0` / `20016-2.0`); rebuild joint datasets | `fusion/data/build_joint_dataset.py:97,101` | rebuild | ⬜ |
-| 5 | Decide the split strategy — re-pretrain both encoders on joint-train only, **or** evaluate on the intersection of both Stage-1 held-out sets | `fusion/data/build_joint_dataset.py:365` | yes | ⬜ **judgement call** |
+| 4 | Joint targets → instance 2 (`21003-2.0` / `20016-2.0`). Proteomics Stage 1 deliberately **stays** instance 0 — see LOG 2026-07-30 | `fusion/data/build_joint_dataset.py` | rebuild | ✅ **done 2026-07-30** |
+| 5 | Split strategy — **option C** (exclude joint val/test from Stage-1 training) chosen; see the decision section below. `--exclude-eids` implemented, awaiting the final Stage-1 run | `fusion/data/build_joint_dataset.py:365` | yes | 🔶 tooling done, run pending |
 | 6 | Refit the proteomics scaler/imputer on the joint train fold (line 266 is currently an explicit no-op) | `fusion/data/build_joint_dataset.py:259-266` | yes | ⬜ |
 | 7 | Raise `WEIGHT_DECAY` above 1e-5 for fluid IQ | `proteomics/config.py` | yes | ⬜ flag added, value unchanged |
 | 8 | Aggregate **final-epoch** CV metrics, not best-epoch (fluid IQ sign flips: +0.059 → −0.084) | `proteomics/training/cv_stage1.py:302,439` | recompute | ⬜ |

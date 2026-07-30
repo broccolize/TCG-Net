@@ -95,13 +95,34 @@ SPLIT_JOINT_PATH = SHARED_DATA_DIR / f"split_joint_{SPLIT_SEED}.npz"
 STAGE1_EXCLUDE_EIDS_PATH = SHARED_DATA_DIR / f"stage1_exclude_eids_{SPLIT_SEED}.npy"
 
 # Target column → (phesant CSV column name, output dataset path).
+#
+# INSTANCE 2 (imaging visit), deliberately — do not "align" these with the
+# instance-0 columns used by proteomics/data/build_dataset.py.
+#
+# The connectomes in corr_matrix.mat were acquired at the imaging visit, and the
+# fMRI Stage-1 encoder was pretrained against 20016-2.0
+# (fmri/Code/train_fmri_stage1.py). Supervising the joint model on instance 0
+# would mean predicting a cognitive test taken ~9 years before the scan; for age
+# it meant regressing age at recruitment, which trails the scan by
+# 8.99 +/- 1.79 years (measured on this cohort).
+#
+# It is also a large data win. Measured coverage over the 5,328 joint participants:
+#     21003-0.0  5,328 (100.0%)      21003-2.0  5,328 (100.0%)
+#     20016-0.0  1,754 ( 32.9%)      20016-2.0  4,950 ( 92.9%)   <- 2.82x
+#
+# The asymmetry with proteomics Stage 1 is intentional. The Olink panel was run on
+# BASELINE samples (UKB_Protein_BL_withCov.csv), so instance-0 cognition is
+# contemporaneous with the blood draw there, and gives 16,903 pretraining subjects
+# against 6,289 at instance 2. Each encoder is pretrained against the measurement
+# matching its own modality's collection date; the joint model is supervised on
+# the imaging visit.
 TARGET_CONFIG: dict[str, dict] = {
     "age": {
-        "column": "21003-0.0",
+        "column": "21003-2.0",
         "output": DATASET_JOINT_AGE_PATH,
     },
     "fluid_iq": {
-        "column": "20016-0.0",
+        "column": "20016-2.0",
         "output": DATASET_JOINT_IQ_PATH,
     },
 }

@@ -78,6 +78,20 @@ PHESANT_DIR = HOME_ROOT / "uk_BIOBANK_DATA" / "table"
 
 # Target → (column_name, output_path_constant). The CSV file is discovered
 # at runtime by header scan — no filename is hardcoded here.
+#
+# INSTANCE 0 (baseline), deliberately — do not "align" these with the instance-2
+# columns used by fusion/data/build_joint_dataset.py.
+#
+# The Olink panel was run on BASELINE samples (UKB_Protein_BL_withCov.csv), so
+# instance-0 cognition is contemporaneous with the blood draw. Instance 2 would
+# ask the encoder to predict a test taken ~9 years after the sample was taken,
+# and would shrink the pretraining cohort from 16,903 to 6,289 — of which 4,950
+# are already in the joint cohort, so pretraining would add almost nothing over
+# Stage 2 itself.
+#
+# The joint dataset uses instance 2 because the connectomes are from the imaging
+# visit. Each encoder is pretrained against the measurement matching its own
+# modality's collection date.
 TARGET_CONFIG: dict[str, dict] = {
     "age": {
         "column": "21003-0.0",
