@@ -14,7 +14,7 @@ wastes hours of compute.
 
 | # | Fix | Where | Re-run? | Status |
 |---|---|---|---|---|
-| 1 | `phi_int` → real 2-way interaction index; `l_shapley` redefined to avoid the `phi_int²` trap | `fusion/models/shapley_fusion.py:48`, `fusion/training/losses.py:20` | yes | ✅ **done 2026-07-30** |
+| 1 | `phi_int` → real 2-way interaction index; `l_shapley` redefined to avoid the `phi_int²` trap | `fusion/models/shapley_fusion.py:48`, `fusion/training/losses.py:20` | yes | ✅ **done + verified in a real run 2026-07-30** — l_shapley 0 → 0.02-0.06, w_int span 0.065 → 0.231 |
 | 2 | Retrain proteomics Stage 1 (was an epoch-1, `val_r2=0.047` checkpoint) | `proteomics/training/train_stage1.py` | yes | ✅ **fluid IQ done 2026-07-30** — R² 0.107 ± 0.009, leakage-free. Age still pending |
 | 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ✅ **done 2026-07-30** |
 | 4 | Joint targets → instance 2 (`21003-2.0` / `20016-2.0`). Proteomics Stage 1 deliberately **stays** instance 0 — see LOG 2026-07-30 | `fusion/data/build_joint_dataset.py` | rebuild | ✅ **done 2026-07-30** |
@@ -53,6 +53,8 @@ wastes hours of compute.
 | 27 | Add an EID-uniqueness assert (passes today: 52697 rows, 52697 unique) | `proteomics/data/preprocess.py:386` | ⬜ |
 | 28 | `HIDDEN_DIM_1` instead of hardcoded `1024` | `proteomics/analysis/protein_importance.py:156` | ⬜ |
 | 29 | Reconcile the `.pt` vs `.npz` index spaces, or delete the unread `split_joint_*.npz` | `fusion/data/build_joint_dataset.py:479` | ⬜ |
+| 30 | `training_log.jsonl` has no run_id — runs are appended with overlapping epoch numbers, separable only by position | `fusion/training/train_stage2*.py` | ⬜ |
+| 31 | Stage 2 uses bare `print()` while Stage 1 uses logging — no process log, no timestamps, and block-buffered output when piped (needs `python -u` to watch) | `fusion/training/train_stage2*.py` | ⬜ |
 
 ---
 

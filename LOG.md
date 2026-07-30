@@ -38,6 +38,63 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — First clean Stage 2: `phi_int` fix confirmed live in a real run
+
+First Stage-2 run on the corrected pipeline — instance-2 labels, 4,950 joint
+participants, leakage-free proteomics encoder (seed 3, selected on val loss),
+fixed `phi_int` and `l_shapley`.
+
+**Best val MAE 0.7289 z = 1.505 IQ points** (epoch 14), early-stopped at 34.
+
+### The `phi_int` fix is confirmed in production
+
+`fusion/training/checkpoints/training_log.jsonl` holds both the old and new runs:
+
+| | `l_shapley` | `w_int` range |
+|---|---|---|
+| before (30 epochs) | `0.000000` every epoch | 0.2693 – 0.3338 (span 0.065) |
+| **after (34 epochs)** | **0.0206 → 0.0643** | **0.1583 – 0.3892 (span 0.231)** |
+
+`w_int` falls monotonically 0.39 → 0.16 through Phase 2 while `w_p` climbs
+0.24 → 0.55. The gate now responds to data rather than echoing the other two
+logits.
+
+**Scientific consequence:** the model reports proteomics 0.55 / fMRI 0.29 /
+interaction 0.16, with the interaction weight *declining* through training. That
+is evidence of **limited** cross-modal synergy — the opposite of
+`Session4_Age.md:43` ("the interaction term is the second-largest contributor"),
+which was read off a structurally constant value.
+
+`l_sparse` remains flat at ~0.0714 as expected — item 12 (detached GAT attention)
+is still open.
+
+### Two problems visible in the curve
+
+1. **Phase 2 overfits hard.** From the epoch-11 unfreeze, train MAE falls
+   0.79 → 0.53 while val climbs 0.73 → 0.87. Best is epoch 14, three epochs in;
+   everything after is damage. Same disease Stage 1 had, same likely fix — Stage 2
+   has no weight-decay tuning at all. Worth the same sweep treatment.
+2. **Phase 1 barely learns.** val_mae 0.7350 → 0.7328 over ten frozen epochs. Part
+   weak signal, but also consistent with item 13: the encoders are not actually
+   frozen, so Phase 1 is not doing what it claims.
+
+For scale: predicting the mean gives MAE ≈ 0.798 z, so 0.7289 is ~8.6% better
+than guessing.
+
+### New minor issue
+
+`training_log.jsonl` has **no run_id** — both runs are appended with overlapping
+epoch numbers and can only be separated by position in the file. Added as item 30.
+
+### Next
+
+- Stage-2 weight-decay sweep (mirrors what fixed Stage 1)
+- Item 9: evaluate the 747 held-out test subjects; every number above is val
+- Item 6: proteomics scaler refit, still the one open leakage channel
+- Item 13: real freeze in Phase 1
+
+---
+
 ## 2026-07-30 — Leakage-free Stage 1 done: test R² 0.107 ± 0.009, exclusion costs ~nothing
 
 First Stage-1 checkpoints trained with `--exclude-eids`. **These are the ones that
