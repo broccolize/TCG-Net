@@ -83,18 +83,26 @@ Confirmed unaffected by the upstream change: `FLUID_IQ_COL = '20016-2.0'`
 
 ## Recommended order
 
-1. **Code-only batch** — 1 ✅, 3, 7, 8, 9, 12, 13, 14, 16. Cheap, and several change
-   what a re-run produces.
-2. **Item 5** — the split-strategy decision. Everything downstream depends on it,
-   and it is the only genuine judgement call in the list.
-3. **Item 2** — retrain proteomics Stage 1 with early stopping in place.
-4. **Items 4 + 6** — rebuild the joint datasets with instance-2 labels and a
-   refit scaler.
+0. **Diagnostic retrain first.** Run proteomics Stage 1 on fluid IQ with early
+   stopping and a weight-decay sweep, on the *existing* dataset. This answers the
+   question everything else depends on: does fluid IQ have any signal at all once
+   it stops overfitting at epoch 1? If it does not, the leakage work below is moot
+   for that target. Cheap, and needs nothing from the shared directory.
+1. **Code-only batch** — 1 ✅, 3 ✅, then 7, 8, 9, 12, 13, 14, 16.
+2. **Item 5** — the split-strategy decision (option C recommended above). It is
+   the only genuine judgement call in the list.
+3. **Items 4 + 6** — rebuild the joint datasets with instance-2 labels and a refit
+   scaler. Under option C this now comes **before** the final Stage-1 runs,
+   because it produces the exclusion list.
+4. **Item 2** — final Stage-1 retrains, excluding joint val/test subjects.
 5. **Delete the graph-feature caches** (item 22) — otherwise the stale cache is
-   silently reloaded and the leakage survives the fix invisibly.
+   silently reloaded and both the leakage fix and the colleague's z-score
+   correction are discarded invisibly. Starting a fresh `/shared/tcgnet_data_2`
+   handles this for free.
 6. **Re-run Stage 2**, then regenerate everything under `fusion/analysis/results/`.
 
-Doing 2 or 4 before 5 wastes the run.
+Step 0 is diagnostic and safe to do now. The *final* Stage-1 run must come after
+step 3, or it trains on subjects that end up in the Stage-2 evaluation set.
 
 ---
 
@@ -103,11 +111,42 @@ Doing 2 or 4 before 5 wastes the run.
 The joint split is currently drawn independently of both Stage-1 splits, so ~85%
 of Stage-2 val/test subjects were seen by the encoders during Stage-1 training.
 
-| Option | Test set size | Cost |
+| Option | Stage-2 test size | Stage-1 training cost |
 |---|---|---|
-| Evaluate only on subjects held out by **both** Stage-1 runs | ~160 (age), ~50-70 (fluid IQ) | free, but confidence intervals are wide |
-| **Re-pretrain both encoders on joint-train only** | 799 (age), 249 (fluid IQ) | two extra Stage-1 runs; methodologically standard for two-stage transfer |
-| Grow the joint cohort | — | data-pipeline question; age is already 5,328 |
+| A — evaluate only on subjects held out by **both** Stage-1 runs | ~160 age, ~50-70 fluid IQ | free, but the interval is far too wide to conclude anything |
+| B — re-pretrain both encoders on **joint-train only** | 799 age, 249 fluid IQ | severe: proteomics Stage 1 drops from tens of thousands of subjects to 1,244 |
+| **C — exclude joint val/test subjects from Stage-1 training, keep everyone else** | 799 age, 249 fluid IQ | ~510 subjects removed from a ~40k training set |
 
-Recommended: re-pretrain. Age has 5,328 joint participants, which makes it
-considerably more viable than the fluid IQ figure alone suggests.
+### Recommended: option C
+
+Option B was the earlier recommendation and it is the wrong trade. Restricting
+proteomics Stage 1 to the joint-train subjects would throw away ~97% of the
+training data to solve a problem caused by ~510 specific participants.
+
+The leakage is not "Stage 1 trained on too many subjects" — it is "Stage 1 trained
+on *these particular* subjects, who are now in the Stage-2 evaluation set". Remove
+exactly those and the problem is gone:
+
+1. Build the joint dataset → this fixes the joint split.
+2. Take the joint `val_idx` + `test_idx` EIDs (510 for fluid IQ, ~1,598 for age).
+3. Drop those EIDs from the proteomics Stage-1 `train_idx` **and** `val_idx`
+   (val too, or they still influence best-epoch selection).
+4. Train Stage 1 on what remains — a ~1% reduction.
+5. Same exclusion on the fMRI side.
+
+Every Stage-2 evaluation subject is then provably unseen by both encoders, at
+full test-set size.
+
+The joint cohort is a subset of each modality's Stage-1 cohort
+(joint = proteomics ∩ fMRI ∩ target), so the exclusion is always well defined.
+
+> [!important] This inverts part of the run order
+> The joint dataset must be built **before** the final Stage-1 runs, so the
+> exclusion list exists. `build_joint_dataset.py` needs only
+> `proteomics_tensor.pt` and `corr_matrix.mat` — not any Stage-1 model — so there
+> is no circular dependency.
+
+**Implementation needed** (not yet written): `build_joint_dataset.py` should write
+the joint val/test EIDs to the shared directory, and `train_stage1.py` should gain
+an `--exclude-eids <path>` flag that drops those rows from `train_idx` and
+`val_idx` before the DataLoaders are built.

@@ -38,6 +38,36 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Revised the item-5 split strategy (no code change)
+
+Documentation only. `FIX_PLAN.md` previously recommended **re-pretraining both
+encoders on joint-train only**. That is the wrong trade and has been replaced.
+
+Restricting proteomics Stage 1 to joint-train would cut it from tens of thousands
+of subjects to 1,244 — discarding ~97% of the training data to solve a problem
+caused by ~510 specific participants. The leakage is not "Stage 1 saw too many
+subjects", it is "Stage 1 saw *these particular* subjects, who are now in the
+Stage-2 evaluation set".
+
+**New recommendation (option C):** exclude the joint val/test EIDs from Stage-1
+`train_idx` and `val_idx`, keep everyone else. 510 subjects for fluid IQ, ~1,598
+for age — roughly a 1% reduction. Full-size Stage-2 test set, no leakage.
+
+Consequence for the run order: the joint dataset must be built **before** the
+final Stage-1 runs, so the exclusion list exists. No circular dependency —
+`build_joint_dataset.py` needs only `proteomics_tensor.pt` and `corr_matrix.mat`,
+not any Stage-1 model.
+
+Still to implement: `build_joint_dataset.py` writing the joint val/test EIDs, and
+an `--exclude-eids` flag on `train_stage1.py`.
+
+A **diagnostic** Stage-1 retrain on the existing fluid IQ dataset is unaffected by
+any of this and is now step 0 in the plan — it answers whether fluid IQ has any
+signal at all once early stopping prevents the epoch-1 collapse. If it does not,
+the leakage work is moot for that target.
+
+---
+
 ## 2026-07-30 — Redirect to `/shared/tcgnet_data_2`; target-specific proteomics checkpoint
 
 Both branches are re-training, so a clean shared directory is being started.
