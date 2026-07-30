@@ -90,6 +90,10 @@ DATASET_JOINT_AGE_PATH = SHARED_DATA_DIR / "dataset_joint_age.pt"
 DATASET_JOINT_IQ_PATH = SHARED_DATA_DIR / "dataset_joint_fluid_iq.pt"
 SPLIT_JOINT_PATH = SHARED_DATA_DIR / f"split_joint_{SPLIT_SEED}.npz"
 
+# EIDs of every joint val/test participant. Fed to train_stage1.py --exclude-eids
+# so Stage 1 never trains on a subject that Stage 2 evaluates on.
+STAGE1_EXCLUDE_EIDS_PATH = SHARED_DATA_DIR / f"stage1_exclude_eids_{SPLIT_SEED}.npy"
+
 # Target column → (phesant CSV column name, output dataset path).
 TARGET_CONFIG: dict[str, dict] = {
     "age": {
@@ -485,6 +489,30 @@ def main() -> None:
             y_0_fluid_iq=np.float32(y_0_results.get("fluid_iq", np.nan)),
         )
         logger.info("Joint split file written: %s", SPLIT_JOINT_PATH)
+
+        # ------------------------------------------------------------------
+        # Step 7b: Stage-1 exclusion list.
+        #
+        # Every participant in the joint val/test folds is evaluated on in
+        # Stage 2, so none of them may appear in a Stage-1 *training* set — the
+        # pretrained encoders would otherwise have already seen their labels
+        # through the aux head. Written as EIDs rather than indices because the
+        # proteomics and fMRI Stage-1 cohorts have entirely different row spaces.
+        #
+        # Consumed by: train_stage1.py --exclude-eids
+        #
+        # This is the joint-level split, so it is a superset of each target's
+        # val/test set. Participants without a given target simply do not appear
+        # in that target's dataset, making the extra entries harmless no-ops.
+        # ------------------------------------------------------------------
+        exclude_eids = np.concatenate([joint_eids[val_idx], joint_eids[test_idx]])
+        exclude_eids = np.unique(exclude_eids).astype(np.int64)
+        np.save(STAGE1_EXCLUDE_EIDS_PATH, exclude_eids)
+        logger.info(
+            "Stage-1 exclusion list written: %s (%d EIDs = joint val %d + test %d). "
+            "Pass this to train_stage1.py --exclude-eids before the final Stage-1 runs.",
+            STAGE1_EXCLUDE_EIDS_PATH, exclude_eids.size, val_idx.size, test_idx.size,
+        )
 
         # ------------------------------------------------------------------
         # Step 8: Preprocessing JSON log.

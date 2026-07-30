@@ -23,6 +23,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset, TensorDataset
@@ -119,6 +120,15 @@ def parse_args() -> argparse.Namespace:
         help="Global random seed (RNG, weight init, DataLoader workers).",
     )
     parser.add_argument(
+        "--exclude-eids", type=Path, default=None, dest="exclude_eids",
+        help=(
+            "Path to a .npy array of EIDs to drop from the training and validation "
+            "splits. Use the file written by fusion/data/build_joint_dataset.py "
+            "(stage1_exclude_eids_<seed>.npy) so Stage 1 never trains on a "
+            "participant that Stage 2 evaluates on."
+        ),
+    )
+    parser.add_argument(
         "--no-test-eval", action="store_true", dest="no_test_eval",
         help="Skip test-set evaluation after training completes.",
     )
@@ -151,6 +161,70 @@ def load_dataset(target: str, logger) -> dict:
         bundle["target_name"],
     )
     return bundle
+
+
+def apply_eid_exclusion(bundle: dict, exclude_path: Path, logger) -> dict:
+    """
+    Drop participants listed in ``exclude_path`` from train_idx and val_idx.
+
+    Stage 2 evaluates on the joint val/test folds, so those participants must
+    never appear in a Stage-1 *training* set — otherwise the pretrained encoder
+    has already been optimised against their labels via the auxiliary head, and
+    every Stage-2 validation number is inflated.
+
+    val_idx is filtered as well as train_idx: validation drives best-epoch
+    selection, so leaving them there would still let their labels influence which
+    checkpoint is promoted.
+
+    test_idx is deliberately left intact. It is the proteomics-side held-out
+    split, is never trained on, and is what the Stage-1 numbers are reported
+    against.
+
+    Returns
+    -------
+    dict with the exclusion counts, for the experiment JSON.
+    """
+    if not exclude_path.exists():
+        raise FileNotFoundError(
+            f"--exclude-eids file not found: {exclude_path}. It is written by "
+            "fusion/data/build_joint_dataset.py, which must be run first."
+        )
+
+    exclude_eids = np.load(exclude_path).astype(np.int64)
+    eids = bundle["eid"].numpy().astype(np.int64)
+
+    # Row positions in *this* dataset belonging to a held-out participant.
+    banned = np.flatnonzero(np.isin(eids, exclude_eids))
+    logger.info(
+        "Exclusion list: %d EIDs from %s; %d present in this dataset.",
+        exclude_eids.size, exclude_path, banned.size,
+    )
+
+    stats: dict = {
+        "exclude_eids_file": str(exclude_path),
+        "exclude_eids_total": int(exclude_eids.size),
+        "exclude_eids_matched": int(banned.size),
+    }
+
+    for key in ("train_idx", "val_idx"):
+        before = bundle[key].numpy()
+        kept = before[~np.isin(before, banned)]
+        removed = before.size - kept.size
+        logger.info(
+            "  %s: %d -> %d (removed %d, %.2f%%).",
+            key, before.size, kept.size, removed,
+            100.0 * removed / before.size if before.size else 0.0,
+        )
+        if kept.size == 0:
+            raise ValueError(
+                f"Exclusion emptied {key} — every row was held out downstream. "
+                "Check that the exclusion list matches this dataset's split seed."
+            )
+        bundle[key] = torch.from_numpy(kept.astype(np.int64))
+        stats[f"{key}_before_exclusion"] = int(before.size)
+        stats[f"{key}_removed"] = int(removed)
+
+    return stats
 
 
 def build_dataloaders(
@@ -360,6 +434,18 @@ def main() -> None:
         # Step 4: load dataset.
         bundle = load_dataset(args.target, logger)
 
+        # Step 4b: drop Stage-2 evaluation subjects from train/val, if asked.
+        exclusion_stats: dict = {"applied": False}
+        if args.exclude_eids is not None:
+            exclusion_stats = apply_eid_exclusion(bundle, args.exclude_eids, logger)
+            exclusion_stats["applied"] = True
+        else:
+            logger.warning(
+                "No --exclude-eids given. This is fine for a diagnostic run, but a "
+                "Stage-1 encoder trained without it will have seen the participants "
+                "Stage 2 evaluates on."
+            )
+
         # Step 5-6: DataLoaders and device.
         train_loader, val_loader, test_loader = build_dataloaders(
             bundle, args.batch_size, args.seed, logger
@@ -421,6 +507,7 @@ def main() -> None:
                 "dropout_3": DROPOUT_3,
             },
             "dataset_sizes": {"train": n_train, "val": n_val, "test": n_test},
+            "eid_exclusion": exclusion_stats,
             "split_seed": SPLIT_SEED,
             "global_seed": args.seed,
             "encoder_param_count": enc_params,
