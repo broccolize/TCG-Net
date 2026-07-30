@@ -57,13 +57,12 @@ _PROTEOMICS_PKG = _REPO_ROOT / "proteomics"
 if str(_PROTEOMICS_PKG) not in sys.path:
     sys.path.insert(0, str(_PROTEOMICS_PKG))
 
-SHARED_DATA_DIR = Path("/shared/tcgnet_data")
-
 from config import (  # noqa: E402  (proteomics/config.py)
     ARTEFACTS_DIR,
     GLOBAL_SEED,
     HOME_ROOT,
     REPO_ROOT,
+    SHARED_DATA_DIR,
     SPLIT_SEED,
     TEST_FRAC,
     TRAIN_FRAC,
@@ -80,7 +79,7 @@ FUSION_LOG_PROCESS = REPO_ROOT / "fusion" / "logs" / "process"
 
 SCALER_PATH = ARTEFACTS_DIR / f"scaler_{SPLIT_SEED}.joblib"
 
-CORR_MATRIX_PATH = Path("/shared/tcgnet_data/corr_matrix.mat")
+CORR_MATRIX_PATH = SHARED_DATA_DIR / "corr_matrix.mat"
 PHESANT_DIR = HOME_ROOT / "uk_BIOBANK_DATA" / "table"
 
 # Input: proteomics_tensor.pt has been moved to the shared data directory.

@@ -56,6 +56,7 @@ rather than redefining its own constants.
 #        python TCG-Net/proteomics/training/cv_stage1.py --target fluid_iq
 # ---------------------------------------------------------------------------
 
+import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,16 @@ HOME_ROOT = REPO_ROOT.parent
 
 # Root of all proteomics-side data (processed tensors, splits, artefacts).
 DATA_DIR = HERE / "data"
+
+# Cross-modality exchange directory, shared between the proteomics, fMRI and
+# fusion branches. Every Stage-2 artefact lives here: corr_matrix.mat, the
+# per-modality Stage-1 encoders, proteomics_tensor.pt, and the joint datasets.
+#
+# Override without editing code:
+#     export TCGNET_SHARED_DATA=/shared/tcgnet_data      # previous generation
+# This is the single definition — fusion/ imports it rather than hardcoding the
+# string, so switching generations is one environment variable, not six edits.
+SHARED_DATA_DIR = Path(os.environ.get("TCGNET_SHARED_DATA", "/shared/tcgnet_data_2"))
 
 # Raw UKB plasma proteomics CSV (with covariates). Lives outside the monorepo
 # under uk_BIOBANK_DATA/ at the parent of TCG-Net/.

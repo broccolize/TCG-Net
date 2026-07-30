@@ -16,7 +16,7 @@ wastes hours of compute.
 |---|---|---|---|---|
 | 1 | `phi_int` → real 2-way interaction index; `l_shapley` redefined to avoid the `phi_int²` trap | `fusion/models/shapley_fusion.py:48`, `fusion/training/losses.py:20` | yes | ✅ **done 2026-07-30** |
 | 2 | Retrain proteomics Stage 1 — current artefact is an epoch-1, `val_r2=0.047` fluid-IQ checkpoint feeding **both** Stage-2 runs | `proteomics/training/train_stage1.py` | yes | ⬜ code ready, **retrain pending** |
-| 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ⬜ |
+| 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ✅ **done 2026-07-30** |
 | 4 | Targets → instance 2 (`21003-2.0` / `20016-2.0`); rebuild joint datasets | `fusion/data/build_joint_dataset.py:97,101` | rebuild | ⬜ |
 | 5 | Decide the split strategy — re-pretrain both encoders on joint-train only, **or** evaluate on the intersection of both Stage-1 held-out sets | `fusion/data/build_joint_dataset.py:365` | yes | ⬜ **judgement call** |
 | 6 | Refit the proteomics scaler/imputer on the joint train fold (line 266 is currently an explicit no-op) | `fusion/data/build_joint_dataset.py:259-266` | yes | ⬜ |
@@ -33,7 +33,7 @@ wastes hours of compute.
 | 12 | Stop detaching GAT attention so `l_sparse` has a gradient: `self.last_attn = (attn_ei.detach(), attn_w)` | `fmri/Code/train_fmri_stage1.py:500` | ⬜ |
 | 13 | `.eval()` on frozen encoders while `phase == 1` — `requires_grad_(False)` does not stop BatchNorm buffer updates or dropout | `fusion/training/train_stage2.py:165` | ⬜ |
 | 14 | Seed Stage 2 — no `set_global_seeds`, no `DataLoader(generator=...)` anywhere | `fusion/training/train_stage2*.py` | ⬜ |
-| 15 | Commit the script that produced `fmri_stage1_age_encoder.pt` — it exists and is valid, but nothing in the repo can rebuild it | `fmri/Code/` | ⬜ |
+| 15 | **Write and commit an age variant of `train_fmri_stage1.py`.** Now blocking: the colleague's re-run produced only fluid-IQ encoders, and the old `fmri_stage1_age_encoder.pt` was trained on pre-fix graph features. Age Stage 2 cannot run until this exists | `fmri/Code/` | ⬜ **blocking** |
 | 16 | Anchor the covariate matcher to exact column names — currently binds `AGER`/`MAGEA3` as the age covariate. **Do not run `--residualize` until fixed** | `proteomics/data/preprocess.py:184` | ⬜ |
 | 17 | Correct `Session3_Diagnosis.md:83` and `:156`, which mark the freeze and the scaler leakage as resolved. Both are false | `fusion/Session3_Diagnosis.md` | ⬜ |
 | 18 | Commit `fusion/analysis/*.py` — four untracked files that produced your figures, existing only on one server | `fusion/analysis/` | ⬜ |

@@ -38,6 +38,41 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Redirect to `/shared/tcgnet_data_2`; target-specific proteomics checkpoint
+
+Both branches are re-training, so a clean shared directory is being started.
+
+**Path redirection.** `/shared/tcgnet_data` was hardcoded in six places across
+three fusion files. Replaced with a single constant,
+`proteomics/config.py::SHARED_DATA_DIR`, defaulting to `/shared/tcgnet_data_2`
+and overridable via `TCGNET_SHARED_DATA` — so switching generations (or pointing
+at the old one to reproduce an earlier result) is one environment variable rather
+than six edits. Verified both the default and the override resolve correctly.
+
+`fmri/Code/*` paths were **not** touched — they write to the colleague's own
+`~/Project/TCG-Net/Data/` and are outside this branch's scope.
+
+**FIX_PLAN item 3 done at the same time**, because it changes what files need to
+be placed. `PROT_CKPT` is now target-specific
+(`proteomics_stage1_age.pt` / `proteomics_stage1_fluid_iq.pt`), and both trainers
+now assert `ckpt['config']['target']` matches the run, raising a named error
+instead of silently warm-starting from the wrong encoder. They also print the
+checkpoint's target, epoch and val_r2 on load, which would have made the epoch-1
+problem obvious months ago.
+
+**New file:** [`SHARED_DATA_MANIFEST.md`](SHARED_DATA_MANIFEST.md) — exactly what
+goes in the new directory, what is deliberately excluded, and why.
+
+> [!danger] Age Stage 2 is blocked
+> `fmri_stage1_age_encoder.pt` is not in the colleague's Data folder — it contains
+> only fluid-IQ encoders — and no committed script produces it. The old one on
+> `/shared/tcgnet_data` was trained on pre-fix graph features, so copying it
+> forward would pair a stale encoder with corrected features. Someone needs to
+> write and commit an age variant of `train_fmri_stage1.py` (item 15).
+> **Fluid IQ Stage 2 is not blocked.**
+
+---
+
 ## 2026-07-30 — Rebased onto upstream fMRI feature fix
 
 Fetched `origin/main`, which had moved from `fd6030a` to `28bb8b9` (two commits by

@@ -11,6 +11,7 @@ from train_fmri_stage1 import (
 )
 from fusion.training.losses import Stage2Loss
 from proteomics.models.encoder import ProteomicsEncoder
+from proteomics.config import SHARED_DATA_DIR
 from fusion.models import FusionOutput, CooperativeShapleyFusion, PredictionHead
 
 import numpy as np
@@ -67,10 +68,14 @@ def unfreeze(module: nn.Module) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    JOINT_PT   = Path('/shared/tcgnet_data/dataset_joint_age.pt')
-    FEAT_CACHE = Path('/shared/tcgnet_data/graph_feats_joint_age.npz')
-    FMRI_CKPT  = Path('/shared/tcgnet_data/fmri_stage1_age_encoder.pt')
-    PROT_CKPT  = Path('/shared/tcgnet_data/proteomics_stage1.pt')
+    TARGET     = 'age'
+    JOINT_PT   = SHARED_DATA_DIR / 'dataset_joint_age.pt'
+    FEAT_CACHE = SHARED_DATA_DIR / 'graph_feats_joint_age.npz'
+    FMRI_CKPT  = SHARED_DATA_DIR / 'fmri_stage1_age_encoder.pt'
+    # Target-specific: both trainers previously pointed at one shared
+    # proteomics_stage1.pt, which was verified to be the fluid_iq encoder — so
+    # this age run was warm-starting its proteomics branch from a fluid_iq model.
+    PROT_CKPT  = SHARED_DATA_DIR / 'proteomics_stage1_age.pt'
     SAVE_DIR   = REPO_ROOT / 'fusion' / 'training' / 'checkpoints_age'
     BATCH_SIZE = 32
 
@@ -106,6 +111,17 @@ def main():
 
     prot_enc = ProteomicsEncoder().to(device)
     prot_ckpt = torch.load(PROT_CKPT, map_location=device, weights_only=False)
+    ckpt_target = prot_ckpt.get('config', {}).get('target')
+    if ckpt_target != TARGET:
+        raise ValueError(
+            f"{PROT_CKPT.name} was trained on target={ckpt_target!r}, but this is "
+            f"the {TARGET!r} run. Loading it would warm-start the proteomics branch "
+            f"from a model fit to a different target. Point PROT_CKPT at the "
+            f"{TARGET!r} Stage-1 checkpoint."
+        )
+    print(f'[ckpt] proteomics encoder: {PROT_CKPT.name} '
+          f"(target={ckpt_target}, epoch={prot_ckpt.get('epoch')}, "
+          f"val_r2={prot_ckpt.get('val_metrics', {}).get('val_r2')})")
     prot_enc.load_state_dict(prot_ckpt['encoder_state_dict'])
 
     # Phase 1: T=1.0 (soft gate — prevents extreme winner-take-all from noisy random aux heads)
