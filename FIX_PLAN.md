@@ -22,7 +22,7 @@ wastes hours of compute.
 | 6 | Refit the proteomics scaler/imputer on the joint train fold (line 266 is currently an explicit no-op) | `fusion/data/build_joint_dataset.py:259-266` | yes | ⬜ |
 | 7 | Raise `WEIGHT_DECAY` above 1e-5 for fluid IQ | `proteomics/config.py` | yes | ✅ **done 2026-07-30** — 1e-1 established by sweep; pass explicitly, config default unchanged for age |
 | 8 | Aggregate **final-epoch** CV metrics, not best-epoch (fluid IQ sign flips: +0.059 → −0.084) | `proteomics/training/cv_stage1.py:302,439` | recompute | ⬜ |
-| 9 | Actually evaluate `test_loader` — 799 age / 249 fluid IQ held-out subjects unused | `fusion/training/train_stage2.py:97` | no | ⬜ |
+| 9 | Actually evaluate `test_loader` — 799 age / 249 fluid IQ held-out subjects unused | `fusion/training/train_stage2.py:97` | no |✅ **done 2026-07-30** |
 | 10 | Fluid IQ Stage 2 predicts a near-constant (`y_hat` std 0.013 vs `y_true` std 1.0); val MAE 0.727 is ~9% better than guessing the mean | `fusion/models/prediction_head.py` + item 2 | yes | ⬜ |
 | 11 | Softmax `temperature=0.1` saturates the gate — age weights are binary (0/1, std 0.46), fluid IQ frozen near ⅓ (std 0.02). Neither is adaptive soft fusion | `fusion/models/shapley_fusion.py:52` | yes | ⬜ |
 
@@ -31,8 +31,8 @@ wastes hours of compute.
 | # | Fix | Where | Status |
 |---|---|---|---|
 | 12 | Stop detaching GAT attention so `l_sparse` has a gradient: `self.last_attn = (attn_ei.detach(), attn_w)` | `fmri/Code/train_fmri_stage1.py:500` | ⬜ |
-| 13 | `.eval()` on frozen encoders while `phase == 1` — `requires_grad_(False)` does not stop BatchNorm buffer updates or dropout | `fusion/training/train_stage2.py:165` | ⬜ |
-| 14 | Seed Stage 2 — no `set_global_seeds`, no `DataLoader(generator=...)` anywhere | `fusion/training/train_stage2*.py` | ⬜ |
+| 13 | `.eval()` on frozen encoders while `phase == 1` — `requires_grad_(False)` does not stop BatchNorm buffer updates or dropout | `fusion/training/train_stage2.py:165` |✅ **done 2026-07-30** |
+| 14 | Seed Stage 2 — no `set_global_seeds`, no `DataLoader(generator=...)` anywhere | `fusion/training/train_stage2*.py` |✅ **done 2026-07-30** |
 | 15 | **Write and commit an age variant of `train_fmri_stage1.py`.** Now blocking: the colleague's re-run produced only fluid-IQ encoders, and the old `fmri_stage1_age_encoder.pt` was trained on pre-fix graph features. Age Stage 2 cannot run until this exists | `fmri/Code/` | ⬜ **blocking** |
 | 16 | Anchor the covariate matcher to exact column names — currently binds `AGER`/`MAGEA3` as the age covariate. **Do not run `--residualize` until fixed** | `proteomics/data/preprocess.py:184` | ⬜ |
 | 17 | Correct `Session3_Diagnosis.md:83` and `:156`, which mark the freeze and the scaler leakage as resolved. Both are false | `fusion/Session3_Diagnosis.md` | ⬜ |
@@ -43,7 +43,7 @@ wastes hours of compute.
 
 | # | Fix | Where | Status |
 |---|---|---|---|
-| 20 | `drop_last=True` on the Stage-2 train loader (inert at 18/28 today, re-arms after item 4) | `fusion/training/train_stage2.py:95` | ⬜ |
+| 20 | `drop_last=True` on the Stage-2 train loader (inert at 18/28 today, re-arms after item 4) | `fusion/training/train_stage2.py:95` |✅ **done 2026-07-30** |
 | 21 | Apply `BAD_FC_EIDS` in the joint build (empty intersection today — protective by accident) | `fusion/data/build_joint_dataset.py:291` | ⬜ |
 | 22 | Key the graph-feature cache by split **and feature definition**; delete both caches before any re-run — see the ⚠️ note below, this is now urgent | `fusion/training/train_stage2.py:90` | ⬜ **live** |
 | 23 | Make the alignment check touch the fMRI side; assert `fc_all.shape[0] == fc_ids.size` and `fc_all.shape[1] == 66` | `fusion/data/build_joint_dataset.py:339,351` | ⬜ |
@@ -53,7 +53,8 @@ wastes hours of compute.
 | 27 | Add an EID-uniqueness assert (passes today: 52697 rows, 52697 unique) | `proteomics/data/preprocess.py:386` | ⬜ |
 | 28 | `HIDDEN_DIM_1` instead of hardcoded `1024` | `proteomics/analysis/protein_importance.py:156` | ⬜ |
 | 29 | Reconcile the `.pt` vs `.npz` index spaces, or delete the unread `split_joint_*.npz` | `fusion/data/build_joint_dataset.py:479` | ⬜ |
-| 30 | `training_log.jsonl` has no run_id — runs are appended with overlapping epoch numbers, separable only by position | `fusion/training/train_stage2*.py` | ⬜ |
+| 30 | `training_log.jsonl` has no run_id — runs are appended with overlapping epoch numbers, separable only by position | `fusion/training/train_stage2*.py` |✅ **done 2026-07-30** |
+| 32 | **`train_stage2_age.py` is now behind `train_stage2.py`** — items 9/13/14/20/30 and argparse were applied only to the fluid IQ trainer. Dedupe them, or port the changes | `fusion/training/train_stage2_age.py` | ⬜ |
 | 31 | Stage 2 uses bare `print()` while Stage 1 uses logging — no process log, no timestamps, and block-buffered output when piped (needs `python -u` to watch) | `fusion/training/train_stage2*.py` | ⬜ |
 
 ---

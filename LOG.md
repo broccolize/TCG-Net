@@ -38,6 +38,43 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Stage 2: test evaluation, real freeze, seeding, argparse
+
+Five fixes to `fusion/training/train_stage2.py`, all needed before any Stage-2
+number is reportable.
+
+| Item | Fix |
+|---|---|
+| 9 | **Held-out test evaluation.** `test_loader` was built and never used, so every Stage-2 number was a validation minimum that had also selected the checkpoint and driven early stopping. Now reloads `best_model.pt` after training and scores the 747 test subjects, writing `test_metrics_fluid_iq_<run_id>.json`. |
+| 13 | **Phase 1 actually freezes now.** `freeze()` only clears `requires_grad`; BatchNorm running stats are buffers and update anyway, and dropout stays active. The encoders now go to `.eval()` while `phase == 1`. |
+| 14 | **Seeding.** `set_global_seeds(args.seed)` plus a seeded DataLoader generator. Nothing in Stage 2 was seeded before, so no run was reproducible. |
+| 20 | **`drop_last=True`** on the train loader — `ProteomicsEncoder` normalises over the batch dimension and a trailing batch of 1 raises inside `BatchNorm1d`. |
+| 30 | **`run_id`, `seed` and `weight_decay` in every JSONL row**, so appended runs are separable. Previously two runs shared the file with overlapping epoch numbers. |
+
+Also added: **argparse** (`--seed`, `--weight-decay`, `--lr-head`, `--lr-encoder`,
+`--epochs`, `--patience`, `--phase2-epoch`, `--no-test-eval`) so Stage 2 can be
+swept the way Stage 1 was, and a shared `evaluate()` used by both the validation
+loop and the test pass.
+
+`evaluate()` also fixes two things in passing: metrics are now computed on pooled
+predictions rather than as an average of per-batch means, and it reports R² and
+Pearson r alongside MAE — with a zero-variance guard, since Stage 1 produced
+`pearson_r = nan` at wd=3e0 when the model collapsed to a constant.
+
+> [!warning] `train_stage2_age.py` is now behind
+> None of the above was applied to the age trainer, which is a near-duplicate. It
+> is blocked anyway (no age fMRI encoder — item 15), but the divergence is real
+> and is exactly the duplication hazard flagged in the review. Tracked as item 32.
+
+### Expect the numbers to move
+
+The Phase-1 freeze fix changes what Phase 1 computes: the encoders now use their
+pretrained BatchNorm statistics instead of joint-cohort ones, and their dropout is
+off. Phase-1 validation was previously measuring a moving target, so the new curve
+is not comparable to the run logged above.
+
+---
+
 ## 2026-07-30 — First clean Stage 2: `phi_int` fix confirmed live in a real run
 
 First Stage-2 run on the corrected pipeline — instance-2 labels, 4,950 joint
