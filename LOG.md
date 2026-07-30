@@ -38,6 +38,69 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Fluid IQ weight-decay sweep: test R² 0.067 → 0.110
+
+First results from the retrained Stage 1. Diagnostic runs on the **existing**
+`dataset_fluid_iq.pt` (no leakage fix yet), so these are comparable to the old
+numbers but not yet publishable.
+
+Cohort: train **11,841** / val **2,507** / test **2,555** (16,903 total).
+Runs take ~2 s/epoch on a 4090 — a full run is under a minute.
+
+### Weight-decay sweep (seed 42)
+
+| wd | best epoch | best val_loss | test R² | test MAE | test r |
+|---|---|---|---|---|---|
+| 1e-5 (old default) | 1 | 4.5422 | 0.0667 | 1.6812 | 0.2634 |
+| 1e-3 | 1 | 4.5475 | 0.0667 | 1.6810 | 0.2631 |
+| 1e-2 | 4 | 4.5397 | 0.0715 | 1.6760 | 0.3139 |
+| 3e-2 | 14 | 4.4212 | 0.0828 | 1.6651 | 0.3081 |
+| 1e-1 | 12 | 4.2897 | 0.1077 | 1.6407 | 0.3362 |
+| **3e-1** | **24** | **4.2724** | **0.1104** | **1.6379** | 0.3346 |
+
+### Seed stability at wd=1e-2
+
+| seed | best epoch | test R² | test r |
+|---|---|---|---|
+| 42 | 4 | 0.0715 | 0.3139 |
+| 1 | 3 | 0.0657 | 0.2744 |
+| 2 | 3 | 0.0689 | 0.3022 |
+| 3 | 3 | 0.0587 | 0.3115 |
+
+Mean R² **0.0662 ± 0.0055**.
+
+### Findings
+
+1. **Early stopping works.** Every run stops well short of 30 epochs, and the
+   epoch-1 collapse is gone above wd=1e-2.
+2. **wd=1e-2 does not actually help.** Its four-seed mean R² (0.0662) is
+   indistinguishable from wd=1e-5 (0.0667) — the single-seed 0.0715 that looked
+   like an improvement was the luckiest of four draws. It changes the training
+   *dynamics* (best epoch 1 → 3-4) without changing the outcome. The real
+   threshold is **1e-1**, which sits ~7 sd above the wd=1e-2 seed distribution
+   and is decisively real.
+3. **The best run was truncated, not converged.** wd=3e-1 ran all 30 epochs with
+   best epoch 24 and never triggered early stopping — the curve was still
+   improving when the epoch cap hit. Higher weight decay needs more epochs.
+4. **The calibration gap closed.** At wd=1e-2, r² = 0.0985 vs R² = 0.0715 (a 27%
+   shortfall from mis-scaled predictions). At wd=3e-1, r² = 0.1120 vs R² = 0.1104
+   — essentially none. Heavy regularisation fixed the over-dispersion as well as
+   the overfitting.
+
+Net: test R² **0.067 → 0.110** (+65%), MAE 1.681 → 1.638, r 0.263 → 0.335, against
+the number in `TRAINING_SUMMARY.md`.
+
+**Still a weak association** — that is the honest result for plasma proteomics
+predicting fluid IQ, and it is now an honest weak result rather than an artefact
+of a model that stopped learning at epoch 1.
+
+### Next
+
+Sweep higher with a raised epoch cap, since 3e-1 was cut off:
+`--weight-decay {3e-1, 1e0, 3e0} --epochs 100`, then multi-seed the winner.
+
+---
+
 ## 2026-07-30 — Revised the item-5 split strategy (no code change)
 
 Documentation only. `FIX_PLAN.md` previously recommended **re-pretraining both

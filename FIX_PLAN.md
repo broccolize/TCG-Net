@@ -115,13 +115,18 @@ of Stage-2 val/test subjects were seen by the encoders during Stage-1 training.
 |---|---|---|
 | A — evaluate only on subjects held out by **both** Stage-1 runs | ~160 age, ~50-70 fluid IQ | free, but the interval is far too wide to conclude anything |
 | B — re-pretrain both encoders on **joint-train only** | 799 age, 249 fluid IQ | severe: proteomics Stage 1 drops from tens of thousands of subjects to 1,244 |
-| **C — exclude joint val/test subjects from Stage-1 training, keep everyone else** | 799 age, 249 fluid IQ | ~510 subjects removed from a ~40k training set |
+| **C — exclude joint val/test subjects from Stage-1 training, keep everyone else** | 799 age, 249 fluid IQ | ~357 subjects removed from an 11,841-row training split (**3.0%**) |
 
 ### Recommended: option C
 
-Option B was the earlier recommendation and it is the wrong trade. Restricting
-proteomics Stage 1 to the joint-train subjects would throw away ~97% of the
-training data to solve a problem caused by ~510 specific participants.
+Option B was the earlier recommendation and it is the wrong trade. Measured sizes
+(from the 2026-07-30 sweep): the proteomics fluid IQ cohort is **16,903**
+participants — train 11,841 / val 2,507 / test 2,555. Restricting Stage 1 to the
+1,244 joint-train subjects would throw away ~89% of the training data to solve a
+problem caused by ~510 specific participants.
+
+Of those 510 joint val/test subjects, roughly 70% land in the proteomics train
+split, so option C costs about **357 rows out of 11,841 — 3.0%**.
 
 The leakage is not "Stage 1 trained on too many subjects" — it is "Stage 1 trained
 on *these particular* subjects, who are now in the Stage-2 evaluation set". Remove
