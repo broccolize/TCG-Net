@@ -39,6 +39,7 @@ from config import (  # noqa: E402
     DROPOUT_1,
     DROPOUT_2,
     DROPOUT_3,
+    EARLY_STOP_PATIENCE,
     EPOCHS,
     GLOBAL_SEED,
     LAMBDA_AUX,
@@ -98,6 +99,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lambda-sparse", type=float, default=LAMBDA_SPARSE, dest="lambda_sparse",
         help="Coefficient on the ||s_p||_1 sparsity regularisation term.",
+    )
+    parser.add_argument(
+        "--weight-decay", type=float, default=WEIGHT_DECAY, dest="weight_decay",
+        help=(
+            "Adam weight decay. The 1e-5 default is very light for a 4.2M-parameter "
+            "model on a weak target; try 1e-3 to 1e-2 for fluid_iq."
+        ),
+    )
+    parser.add_argument(
+        "--patience", type=int, default=EARLY_STOP_PATIENCE, dest="patience",
+        help=(
+            "Stop after this many consecutive epochs without a val_loss improvement. "
+            "Pass 0 to disable early stopping and always run --epochs epochs."
+        ),
     )
     parser.add_argument(
         "--seed", type=int, default=GLOBAL_SEED,
@@ -296,7 +311,8 @@ def save_checkpoint(
                 "lr": args.lr,
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
-                "weight_decay": WEIGHT_DECAY,
+                "weight_decay": args.weight_decay,
+                "patience": args.patience,
                 "lambda_sparse": args.lambda_sparse,
                 "lambda_aux": LAMBDA_AUX,
                 "target": args.target,
@@ -328,10 +344,10 @@ def main() -> None:
     try:
         logger.info("Script: train_stage1.py")
         logger.info(
-            "Args: target=%s, epochs=%d, batch_size=%d, lr=%g, "
-            "lambda_sparse=%g, seed=%d, no_test_eval=%s.",
-            args.target, args.epochs, args.batch_size, args.lr,
-            args.lambda_sparse, args.seed, args.no_test_eval,
+            "Args: target=%s, epochs=%d, batch_size=%d, lr=%g, weight_decay=%g, "
+            "patience=%d, lambda_sparse=%g, seed=%d, no_test_eval=%s.",
+            args.target, args.epochs, args.batch_size, args.lr, args.weight_decay,
+            args.patience, args.lambda_sparse, args.seed, args.no_test_eval,
         )
         logger.info("Resolved dataset path: %s", TARGET_MAP[args.target])
         logger.info("Checkpoint dir: %s", CHECKPOINT_DIR)
@@ -368,7 +384,7 @@ def main() -> None:
             [{"params": encoder.parameters()},
              {"params": aux_head.parameters()}],
             lr=args.lr,
-            weight_decay=WEIGHT_DECAY,
+            weight_decay=args.weight_decay,
         )
 
         # Step 9: loss function.
@@ -396,7 +412,8 @@ def main() -> None:
                 "lr": args.lr,
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
-                "weight_decay": WEIGHT_DECAY,
+                "weight_decay": args.weight_decay,
+                "patience": args.patience,
                 "lambda_sparse": args.lambda_sparse,
                 "lambda_aux": LAMBDA_AUX,
                 "dropout_1": DROPOUT_1,
@@ -425,6 +442,8 @@ def main() -> None:
         # Step 12: training loop.
         best_val_loss = float("inf")
         best_epoch = -1
+        epochs_since_improvement = 0
+        stopped_early = False
         best_ckpt_path = CHECKPOINT_DIR / f"stage1_{args.target}_{run_id}_best.pt"
         last_ckpt_path = CHECKPOINT_DIR / f"stage1_{args.target}_{run_id}_last.pt"
 
@@ -481,6 +500,11 @@ def main() -> None:
                     "New best checkpoint — epoch=%d, val_loss=%.6f, val_r2=%.4f.",
                     epoch, val_loss, val_r2,
                 )
+                epochs_since_improvement = 0
+            else:
+                # NaN val_loss also lands here, since `nan < x` is False. That is
+                # deliberate: a diverged epoch must never reset the patience clock.
+                epochs_since_improvement += 1
 
             # ---- CHECKPOINT: last.pt (overwrites every epoch) ---------------
             save_checkpoint(
@@ -494,15 +518,45 @@ def main() -> None:
             )
             logger.info("Last checkpoint updated: %s.", last_ckpt_path)
 
+            # ---- EARLY STOPPING ---------------------------------------------
+            if args.patience > 0 and epochs_since_improvement >= args.patience:
+                stopped_early = True
+                logger.info(
+                    "Early stopping at epoch %d — no val_loss improvement for %d "
+                    "consecutive epochs (best epoch %d, val_loss %.6f).",
+                    epoch, epochs_since_improvement, best_epoch, best_val_loss,
+                )
+                break
+
         # Step 13: post-training summary.
         logger.info(
-            "Training complete. Best epoch: %d. Best val_loss: %.6f.",
+            "Training complete (%s). Best epoch: %d. Best val_loss: %.6f.",
+            "early-stopped" if stopped_early else f"ran all {args.epochs} epochs",
             best_epoch, best_val_loss,
         )
 
         # Step 14: test set evaluation (unless --no-test-eval).
         if not args.no_test_eval:
-            ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+            # `val_loss < best_val_loss` is False for NaN, so a run that diverges on
+            # every epoch never writes best.pt. Fall back to last.pt rather than
+            # dying on FileNotFoundError and discarding the whole run.
+            if best_epoch == -1 or not best_ckpt_path.exists():
+                if not last_ckpt_path.exists():
+                    raise FileNotFoundError(
+                        f"No checkpoint was written — no epoch completed "
+                        f"(epochs={args.epochs}). Nothing to evaluate."
+                    )
+                logger.warning(
+                    "No best checkpoint was written (best_epoch=%d) — val_loss never "
+                    "improved on inf, which usually means the run diverged to NaN. "
+                    "Falling back to %s for test evaluation; treat these metrics as "
+                    "diagnostic, not as a result.",
+                    best_epoch, last_ckpt_path,
+                )
+                eval_ckpt_path = last_ckpt_path
+            else:
+                eval_ckpt_path = best_ckpt_path
+            ckpt = torch.load(eval_ckpt_path, map_location=device, weights_only=False)
             encoder.load_state_dict(ckpt["encoder_state_dict"])
             aux_head.load_state_dict(ckpt["aux_head_state_dict"])
 
@@ -524,6 +578,9 @@ def main() -> None:
                     "run_id": run_id,
                     "target": args.target,
                     "best_epoch": best_epoch,
+                    "stopped_early": stopped_early,
+                    "epochs_run": epoch,
+                    "checkpoint_evaluated": str(eval_ckpt_path),
                     "test_loss": test_metrics["val_loss"],
                     "test_r2": test_metrics["val_r2"],
                     "test_mae": test_metrics["val_mae"],

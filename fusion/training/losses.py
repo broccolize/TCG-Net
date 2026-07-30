@@ -17,7 +17,15 @@ class Stage2Loss(nn.Module):
        y0 = fusion_model.y_baseline
        l_main = self.loss_fn(y_hat, y_true)
        l_aux = F.mse_loss(fusion.y_hat_f, y_true) + F.mse_loss(fusion.y_hat_p, y_true) + F.mse_loss(fusion.y_hat_fp, y_true)
-       l_shapley = (fusion.y_hat_fp - (fusion.phi_f + fusion.phi_p + fusion.phi_int + y0)).pow(2).mean()
+       # Shapley efficiency applied to the FUSED prediction: the gated output y_hat
+       # should reproduce the additive decomposition y0 + phi_f + phi_p.
+       #
+       # phi_int is the interaction *index* (a diagnostic), not an additive
+       # component, so it deliberately does not appear here. Including it — or
+       # comparing against y_hat_fp instead of y_hat — makes this term a tautology
+       # that is identically zero (the pre-fix behaviour), or worse, a penalty of
+       # the form phi_int**2 that drives the interaction toward zero.
+       l_shapley = (y_hat - (y0 + fusion.phi_f + fusion.phi_p)).pow(2).mean()
        
        sp_l1 = s_p.abs().mean()   # logged for monitoring; not in l_sparse (suppresses SE gate)
        af_l1 = alpha_f.abs().mean()
@@ -33,7 +41,7 @@ class Stage2Loss(nn.Module):
         "total":      l_total,
         "l_main":     l_main,
         "l_aux":      l_aux,
-        "l_shapley":  l_shapley,   # always 0 by construction (efficiency identity)
+        "l_shapley":  l_shapley,   # live since the phi_int fix; was identically 0 before
         "l_sparse":   l_sparse,
         "w_f":        fusion.w[:, 0].mean(),   # mean fMRI weight across batch
         "w_p":        fusion.w[:, 1].mean(),   # mean proteomics weight

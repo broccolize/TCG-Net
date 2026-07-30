@@ -124,6 +124,12 @@ BATCH_SIZE = 64
 EPOCHS = 30
 WEIGHT_DECAY = 1e-5
 
+# Stop Stage 1 training after this many consecutive epochs with no improvement in
+# val_loss. EPOCHS is now an upper bound rather than the number of epochs actually
+# run. Added because every fluid_iq CV fold peaked by epoch 3 and then overfit for
+# the remaining 27 epochs, making "best checkpoint" mean "before it went wrong".
+EARLY_STOP_PATIENCE = 10
+
 LAMBDA_SPARSE = 1e-4   # Coefficient on ||s_p||_1 in Stage 1.
 LAMBDA_AUX = 0.3       # Stored for forward-compat (Stage 2 L_aux); not applied in Stage 1.
 LAMBDA_SHAPLEY = 0.1   # Stored for forward-compat with the Stage 2 Shapley alignment term.

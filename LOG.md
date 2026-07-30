@@ -1,0 +1,188 @@
+# TCG-Net — Fix Log
+
+Dated record of code changes made while working through the review findings.
+Newest entry first. Written to be self-contained: if you are picking this up with
+no prior context, read [Current state](#current-state) then the latest entry.
+
+Companion file: [`FIX_PLAN.md`](FIX_PLAN.md) — the full prioritised list of what
+still needs doing.
+
+---
+
+## Current state
+
+**Branch:** `fix/critical-early-stopping-and-phi-int` (off `main` @ `fd6030a`)
+
+**What is trustworthy right now**
+
+| Result | Status |
+|---|---|
+| Proteomics Stage 1 — **age** (test R² 0.868, MAE 2.35 yr) | ✅ verified clean, safe to report |
+| Proteomics Stage 1 — **fluid IQ** (R² 0.047) | ❌ model never learned; peaked at epoch 1 |
+| Proteomics **CV** summary | ⚠️ reports best-epoch, not final-epoch. Fluid IQ sign is wrong: reports **+0.059**, actual **−0.084** |
+| All **Stage 2 / fusion** results | ❌ do not report — see `FIX_PLAN.md` |
+| `fusion/analysis/` figures + CSVs | ❌ regenerate after re-running Stage 2 |
+
+**Four root causes behind almost every finding**
+
+1. The proteomics fluid-IQ encoder never trained (no early stopping) — and *both*
+   Stage-2 runs load it, including the age run.
+2. `phi_int` was mathematically always zero, killing the Shapley interaction value,
+   the `l_shapley` term, and every interpretability output built on them.
+3. Splits are drawn fresh at each stage instead of carried through, so Stage-1
+   training subjects land in Stage-2 validation.
+4. Nothing validates what it loads — checkpoint target, label instance, test-set
+   evaluation, or seeding.
+
+Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
+
+---
+
+## 2026-07-30 — Rebased onto upstream fMRI feature fix
+
+Fetched `origin/main`, which had moved from `fd6030a` to `28bb8b9` (two commits by
+a colleague: `dc0bfa4` "Fix z-score issue to match plan", `28bb8b9` "fixed minor
+issue"). **No file overlap** with this branch — upstream touched only
+`fmri/Code/*` and `fmri/Reference material/TCG Net Plan.md`, this branch touches
+`fusion/` and `proteomics/`. Rebased cleanly, no conflicts.
+
+**What upstream changed:** the within-module degree z-score in
+`compute_graph_features` now z-scores within-module strength (Guimerà & Amaral)
+rather than total strength. This is a genuine correction — the old version was
+"largely redundant with feature 1" per their commit note.
+
+> [!warning] This fix will not reach fusion on its own
+> The graph-feature cache validates only subject count, so re-running Stage 2
+> reloads the OLD features. **Delete `graph_feats_joint.npz` and
+> `graph_feats_joint_age.npz` before any Stage-2 run.** Both `fmri_stage1_*.pt`
+> encoders were also trained on the old features and are now stale relative to
+> the code. See the ⚠️ section in `FIX_PLAN.md`.
+
+**Checked and unaffected:** `FLUID_IQ_COL = '20016-2.0'` still instance 2 (the
+label-mismatch finding stands), `BAD_FC_EIDS` unchanged, and `last_attn` is still
+detached — it just moved from line 500 to **line 504**.
+
+---
+
+## 2026-07-30 — Early stopping (Stage 1) + `phi_int` repair (fusion)
+
+Addresses root causes **1** and **2**. Code only — **nothing has been re-trained
+yet**, so every number on disk still reflects the pre-fix behaviour.
+
+### Fix 1 — Early stopping in proteomics Stage 1
+
+**Why.** Every fluid IQ CV fold peaked by epoch 3 and then overfit for the
+remaining 27 epochs, so "best checkpoint" meant "the moment before it went
+wrong". The checkpoint that got promoted to Stage 2 was epoch 1 with
+`val_r2 = 0.047`.
+
+| File | Change |
+|---|---|
+| `proteomics/config.py` | Added `EARLY_STOP_PATIENCE = 10`. `EPOCHS` is now an upper bound. |
+| `proteomics/training/train_stage1.py` | Added `--patience` (0 disables) and `--weight-decay` CLI flags. |
+| `proteomics/training/train_stage1.py` | Patience counter; `break` when exceeded; `stopped_early` / `epochs_run` / `checkpoint_evaluated` recorded in the test-metrics JSON. |
+| `proteomics/training/train_stage1.py` | Optimiser, checkpoint config and experiment JSON now read `args.weight_decay` instead of the module constant, so the value is tunable and correctly recorded. |
+
+`WEIGHT_DECAY = 1e-5` in config is **unchanged** — only made overridable. The
+1e-5 default is very light for a 4.2M-parameter model on a weak target.
+
+**Adjacent fix included:** `val_loss < best_val_loss` is `False` for NaN, so a run
+that diverged never wrote `best.pt` and then died on `FileNotFoundError` at the
+test-eval step, discarding the whole run. It now falls back to `last.pt` with a
+warning, or raises a clear error if no epoch completed at all. Included because
+raising weight decay increases divergence risk during the retrains below.
+
+**Verified.** Simulated the new patience logic against the real fluid IQ fold-0
+`val_loss` curve from `train_log_fluid_iq_20260508_075907_fd84367d_fold0.csv`:
+
+```
+patience=10 -> stops at epoch 12, selects epoch 2 (val_loss 4.307), saves 18 epochs
+patience= 5 -> stops at epoch  7, selects epoch 2 (val_loss 4.307), saves 23 epochs
+```
+
+Same checkpoint selected, far less wasted compute. All four edited files pass
+`python -m py_compile`.
+
+### Fix 2 — `phi_int` is now a real interaction index
+
+**Why.** `fusion/models/shapley_fusion.py:48` defined `phi_int` as the residual of
+the Shapley efficiency identity. For two players `phi_f + phi_p == y_hat_fp - y0`
+is a *theorem*, so the residual was identically zero for every input — pinning the
+third softmax logit at 0 and making `w_int` a mechanical function of the other
+two. `results/*/summary.json` records `"phi_int_std": 0.0` in both targets.
+
+| File | Change |
+|---|---|
+| `fusion/models/shapley_fusion.py` | `phi_int = y_hat_fp - y_hat_f - y_hat_p + self.y_baseline` (the 2-way interaction index), with a WARNING comment against reverting to the residual form. |
+| `fusion/training/losses.py` | `l_shapley = (y_hat - (y0 + phi_f + phi_p)).pow(2).mean()` — efficiency applied to the **fused** prediction. |
+| `fusion/models/shapley_fusion.py` | Added `assert out.phi_int.abs().max() > 1e-6` to the `__main__` self-test as a regression guard. |
+
+> [!warning] The two edits are a pair — do not apply one without the other.
+> With the corrected `phi_int`, the **old** `l_shapley` formula reduces exactly to
+> `mean(phi_int²)`, i.e. a penalty driving the interaction to zero — the opposite
+> of the intent. Verified numerically: `3.012024` both ways.
+
+**Verified** (pure arithmetic, 100k random draws, no torch needed):
+
+```
+OLD phi_int   max|.| = 4.441e-16   std = 1.226e-17   <- degenerate
+NEW phi_int   max|.| = 7.919e+00   std = 1.736e+00   <- live
+
+OLD l_shapley (tautology)                    = 2.367e-34
+TRAP: old formula with NEW phi_int           = 3.012024  == mean(phi_int^2)
+NEW l_shapley (y_hat vs y0+phi_f+phi_p)      = 2.016202  <- live constraint
+
+efficiency axiom still holds: max|phi_f+phi_p-(y_hat_fp-y0)| = 4.441e-16
+```
+
+`phi_f` and `phi_p` are unchanged and still satisfy efficiency.
+
+### ⚠️ Decision that needs your confirmation
+
+`l_shapley` had to be redefined, not just repaired — the old form is a tautology
+by construction. I chose **Shapley efficiency applied to the fused prediction**:
+`y_hat` should reproduce `y0 + phi_f + phi_p`. This is non-trivial because `y_hat`
+comes from `PredictionHead(z_fusion)` while the decomposition comes from the
+sub-heads.
+
+`phi_int` is deliberately excluded — it is the interaction *index*, a diagnostic,
+not an additive component of the decomposition.
+
+**Check this against §6.4 of the spec PDF, which I have not seen.** If you would
+rather change nothing beyond making `phi_int` real, pass `lambda_shapley=0` to
+`Stage2Loss` and the term becomes an inert diagnostic again.
+
+Also note: `l_shapley` was contributing **zero gradient** before this change and
+now contributes a real one, so Stage-2 training dynamics will differ from every
+run currently on disk. That is intended, but it means old and new runs are not
+comparable.
+
+### Next actions
+
+Re-train Stage 1 for both targets. **Long-running — run these yourself**, from
+`~/TCG-Net` on the server:
+
+```bash
+conda run --no-capture-output -n tcg_net python proteomics/training/train_stage1.py --target age
+```
+
+```bash
+conda run --no-capture-output -n tcg_net python proteomics/training/train_stage1.py --target fluid_iq --weight-decay 1e-3
+```
+
+For fluid IQ, `1e-3` is a starting point; a sweep over `1e-3 … 1e-2` is worth it
+given how fast it overfits. Watch `stopped_early` and `best_epoch` in
+`logs/experiments/test_metrics_*.json`.
+
+Do **not** re-run Stage 2 yet — items 3–6 in `FIX_PLAN.md` (split strategy,
+checkpoint provenance, label instance) should be settled first, or the run is
+wasted.
+
+### Explicitly NOT done in this session
+
+- `proteomics/training/cv_stage1.py` — still has **no early stopping** (it retypes
+  the training loop rather than importing it) and still aggregates best-epoch
+  metrics. The fluid IQ CV sign error is unfixed.
+- Nothing in `fusion/data/build_joint_dataset.py` or the Stage-2 trainers.
+- `fusion/analysis/*.py` — still uncommitted on the server, still unreviewed.
+- No re-training, no data rebuild, no figure regeneration.

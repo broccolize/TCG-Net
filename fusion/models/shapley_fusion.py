@@ -45,7 +45,17 @@ class CooperativeShapleyFusion(nn.Module):
         y_hat_fp = self.H_fp(z_joint).squeeze(-1)
         phi_f = 0.5 * ((y_hat_f - self.y_baseline) + (y_hat_fp - y_hat_p))
         phi_p = 0.5 * ((y_hat_p - self.y_baseline) + (y_hat_fp - y_hat_f))
-        phi_int = y_hat_fp - self.y_baseline - phi_f - phi_p
+
+        # 2-way interaction index: I_fp = v(N) - v(f) - v(p) + v(0).
+        #
+        # WARNING — do not "simplify" this back to the efficiency residual
+        #     phi_int = y_hat_fp - self.y_baseline - phi_f - phi_p
+        # For two players, phi_f + phi_p == y_hat_fp - y_baseline is the Shapley
+        # efficiency axiom: a theorem, not a measured quantity. That form is
+        # therefore identically zero for every input (verified: max |phi_int| was
+        # 3.55e-15 over 10k random draws), which silently pins the third softmax
+        # logit at 0 and makes w_int a mechanical function of the other two.
+        phi_int = y_hat_fp - y_hat_f - y_hat_p + self.y_baseline
 
         # DEVIATION from §4.3: temperature scaling (T=0.1) added to prevent gate collapse
         # to uniform [1/3,1/3,1/3] when Shapley values are small. Not in PDF spec.
@@ -90,6 +100,14 @@ if __name__ == "__main__":
     assert out.phi_int.shape  == (B,),     f"phi_int: {out.phi_int.shape}"
     assert out.z_fusion.shape == (B, 128), f"z_fusion: {out.z_fusion.shape}"
     assert out.w.shape        == (B, 3),   f"w: {out.w.shape}"
+
+    # Regression guard: phi_int must be a measured interaction, not the efficiency
+    # residual. The residual form is identically zero and went unnoticed for months.
+    assert out.phi_int.abs().max() > 1e-6, (
+        f"phi_int is degenerate (max |phi_int| = {out.phi_int.abs().max():.3e}). "
+        "It has probably been rewritten as the efficiency residual, which is "
+        "identically zero for two players. See the WARNING in forward()."
+    )
 
     y_hat = head(out.z_fusion)
     assert y_hat.shape == (B,), f"y_hat: {y_hat.shape}"
