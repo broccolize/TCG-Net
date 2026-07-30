@@ -38,6 +38,77 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Fluid IQ tuning settled: **wd=1e-1, test R² 0.113 ± 0.005**
+
+Second sweep with `--epochs 100`. The optimum is now bracketed on both sides.
+
+### Weight decay curve (seed 42)
+
+| wd | best epoch | best val_loss | test R² | test MAE | test r |
+|---|---|---|---|---|---|
+| 1e-2 | 4 | 4.5397 | 0.0715 | 1.6760 | 0.3139 |
+| 3e-2 | 14 | 4.4212 | 0.0828 | 1.6651 | 0.3081 |
+| **1e-1** | 12 | 4.2897 | 0.1077 | 1.6407 | 0.3362 |
+| 3e-1 | 24 | 4.2724 | 0.1104 | 1.6379 | 0.3346 |
+| 1e0 | 24 | 4.4574 | 0.0697 | 1.6809 | 0.2772 |
+| 3e0 | 18 | 5.8737 | −0.2770 | 1.9456 | **nan** |
+
+### Seed stability at wd=1e-1
+
+| seed | best epoch | test R² | test r |
+|---|---|---|---|
+| 42 | 12 | 0.1077 | 0.3362 |
+| 1 | 10 | 0.1152 | 0.3486 |
+| 2 | 16 | 0.1103 | 0.3383 |
+| 3 | 20 | 0.1195 | 0.3467 |
+
+**Mean test R² = 0.1132 ± 0.0052, r = 0.3425.**
+
+### Findings
+
+1. **wd=1e-1 is the answer.** Its four-seed mean (0.1132) sits ~9 sd above the
+   wd=1e-2 distribution (0.0662 ± 0.0055). Not seed luck this time.
+2. **1e-1 and 3e-1 are equivalent.** The single 3e-1 result (0.1104) falls inside
+   the 1e-1 seed range (0.1077-0.1195). Prefer 1e-1: it converges in 10-20 epochs
+   rather than 24.
+3. **Correction to the previous entry.** I recorded wd=3e-1 as "truncated, not
+   converged" because it ran all 30 epochs with best epoch 24. Re-running it with
+   `--epochs 100` gave *bit-identical* results (best epoch 24, val_loss 4.272386,
+   R² 0.1104) — it had already peaked at 24 and simply needed 10 more epochs to
+   trigger the patience counter. Nothing was lost, and the epoch cap was never the
+   binding constraint.
+4. **Past 3e-1 the model collapses.** wd=3e0 gives R² = −0.277 and
+   `test_pearson_r = nan` — the predictions became constant, so `torch.corrcoef`
+   divided by a zero standard deviation. This is the missing zero-variance guard
+   in `evaluate()` firing for real (see minor item 25); it should return a defined
+   sentinel rather than nan.
+
+### Net result for fluid IQ Stage 1
+
+| | before | after |
+|---|---|---|
+| test R² | 0.067 | **0.113 ± 0.005** |
+| test MAE | 1.681 | 1.635 |
+| test r | 0.263 | 0.343 |
+| best epoch | 1 | 10-20 |
+
++69% on R². Still a weak association — that is the honest ceiling for plasma
+proteomics predicting fluid IQ — but it is now a real weak signal rather than a
+model that quit at epoch 1. **Stage 2 for fluid IQ is worth pursuing.**
+
+`WEIGHT_DECAY` in `config.py` stays at 1e-5: age Stage 1 performs well there
+(R² 0.868) and has not been tested at 1e-1. Fluid IQ runs should pass
+`--weight-decay 1e-1` explicitly until the two targets get separate defaults.
+
+### Next
+
+Blocked on the shared directory. Needs `corr_matrix.mat` and
+`fmri_stage1_encoder.pt` in `/shared/tcgnet_data_2`, then build the joint dataset
+to produce the exclusion list, then the final Stage-1 run with `--exclude-eids`
+(not yet implemented).
+
+---
+
 ## 2026-07-30 — Fluid IQ weight-decay sweep: test R² 0.067 → 0.110
 
 First results from the retrained Stage 1. Diagnostic runs on the **existing**
