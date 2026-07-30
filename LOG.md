@@ -38,6 +38,74 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Leakage-free Stage 1 done: test R² 0.107 ± 0.009, exclusion costs ~nothing
+
+First Stage-1 checkpoints trained with `--exclude-eids`. **These are the ones that
+go to Stage 2.**
+
+### Exclusion applied
+
+```
+Exclusion list: 1598 EIDs; 510 present in this dataset.
+  train_idx: 11841 -> 11490 (removed 351, 2.96%)
+  val_idx:    2507 ->  2431 (removed  76, 3.03%)
+```
+
+Only 510 of the 1,598 joint val/test EIDs appear in the proteomics fluid IQ
+dataset, because that dataset is instance-0 (32.9% coverage of the joint cohort).
+The remainder are harmless no-ops. The joint-level list is still a superset of the
+per-target val/test set, so the exclusion is complete.
+
+### Result (wd=1e-1, epochs=100, with exclusion)
+
+| seed | best epoch | test R² | test MAE | test r |
+|---|---|---|---|---|
+| 42 | 15 | 0.0959 | 1.6588 | 0.3143 |
+| 1 | — | 0.1113 | 1.6438 | 0.3377 |
+| 2 | — | 0.1035 | 1.6468 | 0.3324 |
+| 3 | 10 | 0.1156 | 1.6414 | 0.3451 |
+
+**Mean test R² = 0.1066 ± 0.0087, r = 0.3324.**
+
+### The exclusion is essentially free
+
+| | test R² |
+|---|---|
+| no exclusion (4 seeds) | 0.1132 ± 0.0052 |
+| **with exclusion (4 seeds)** | **0.1066 ± 0.0087** |
+
+Difference 0.0066, SE ≈ 0.005, t ≈ 1.3 on ~6 df — not significant. Removing the
+Stage-2 evaluation subjects from Stage-1 training costs nothing measurable, which
+settles item 5 empirically as well as in principle.
+
+> [!warning] Methodological note for anyone reading this later
+> Seed 42 alone gave 0.0959 and was initially read as a real ~3.3 sd drop caused
+> by the exclusion, with plausible mechanisms attached (smaller training set;
+> imaging cohort being non-random). Three more seeds dissolved it entirely. This
+> is the **second** time in this session a single-seed result produced a confident
+> wrong conclusion — the first was wd=1e-2 appearing to beat wd=1e-5. At this
+> effect size (differences of ~0.01 R² against a seed sd of ~0.005-0.009),
+> **no single run should be used to compare configurations.**
+
+### Cumulative effect on fluid IQ Stage 1
+
+| | original | now |
+|---|---|---|
+| test R² | 0.067 | **0.107 ± 0.009** |
+| test MAE | 1.681 | 1.648 |
+| test r | 0.263 | 0.332 |
+| best epoch | 1 | 10-15 |
+| leakage | Stage-2 eval subjects in train | none |
+
+### Next
+
+Copy the chosen checkpoint to `/shared/tcgnet_data_2/proteomics_stage1_fluid_iq.pt`,
+then Stage 2. Item 6 (proteomics scaler refit) is still open and is **not** fixed
+by the exclusion — the scaler was fit before any of this and still saw joint
+val/test rows.
+
+---
+
 ## 2026-07-30 — Joint targets → instance 2; fluid IQ joint cohort 1,754 → 4,950
 
 Measured coverage over the 5,328 joint participants and over the 52,697

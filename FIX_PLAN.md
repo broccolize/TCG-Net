@@ -15,12 +15,12 @@ wastes hours of compute.
 | # | Fix | Where | Re-run? | Status |
 |---|---|---|---|---|
 | 1 | `phi_int` → real 2-way interaction index; `l_shapley` redefined to avoid the `phi_int²` trap | `fusion/models/shapley_fusion.py:48`, `fusion/training/losses.py:20` | yes | ✅ **done 2026-07-30** |
-| 2 | Retrain proteomics Stage 1 — current artefact is an epoch-1, `val_r2=0.047` fluid-IQ checkpoint feeding **both** Stage-2 runs | `proteomics/training/train_stage1.py` | yes | ⬜ code ready, **retrain pending** |
+| 2 | Retrain proteomics Stage 1 (was an epoch-1, `val_r2=0.047` checkpoint) | `proteomics/training/train_stage1.py` | yes | ✅ **fluid IQ done 2026-07-30** — R² 0.107 ± 0.009, leakage-free. Age still pending |
 | 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ✅ **done 2026-07-30** |
 | 4 | Joint targets → instance 2 (`21003-2.0` / `20016-2.0`). Proteomics Stage 1 deliberately **stays** instance 0 — see LOG 2026-07-30 | `fusion/data/build_joint_dataset.py` | rebuild | ✅ **done 2026-07-30** |
-| 5 | Split strategy — **option C** (exclude joint val/test from Stage-1 training) chosen; see the decision section below. `--exclude-eids` implemented, awaiting the final Stage-1 run | `fusion/data/build_joint_dataset.py:365` | yes | 🔶 tooling done, run pending |
+| 5 | Split strategy — **option C** applied. Measured cost: R² 0.1132 → 0.1066, t ≈ 1.3, not significant | `fusion/data/build_joint_dataset.py:365` | yes | ✅ **done 2026-07-30** (proteomics side; fMRI side still pending) |
 | 6 | Refit the proteomics scaler/imputer on the joint train fold (line 266 is currently an explicit no-op) | `fusion/data/build_joint_dataset.py:259-266` | yes | ⬜ |
-| 7 | Raise `WEIGHT_DECAY` above 1e-5 for fluid IQ | `proteomics/config.py` | yes | ⬜ flag added, value unchanged |
+| 7 | Raise `WEIGHT_DECAY` above 1e-5 for fluid IQ | `proteomics/config.py` | yes | ✅ **done 2026-07-30** — 1e-1 established by sweep; pass explicitly, config default unchanged for age |
 | 8 | Aggregate **final-epoch** CV metrics, not best-epoch (fluid IQ sign flips: +0.059 → −0.084) | `proteomics/training/cv_stage1.py:302,439` | recompute | ⬜ |
 | 9 | Actually evaluate `test_loader` — 799 age / 249 fluid IQ held-out subjects unused | `fusion/training/train_stage2.py:97` | no | ⬜ |
 | 10 | Fluid IQ Stage 2 predicts a near-constant (`y_hat` std 0.013 vs `y_true` std 1.0); val MAE 0.727 is ~9% better than guessing the mean | `fusion/models/prediction_head.py` + item 2 | yes | ⬜ |
