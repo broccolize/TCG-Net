@@ -97,7 +97,11 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device):
     Returns mae / loss / r2 / pearson_r on the z-scored target scale.
     """
     fmri_enc.eval(); prot_enc.eval(); fusion.eval(); head.eval()
-    preds, targets = [], []
+    # The fused output plus the three internal branch predictions. Scoring the
+    # branches is the only way to tell whether the fusion module adds anything
+    # over its own inputs, or destroys signal that was already there.
+    cols = {k: [] for k in ('y_hat', 'y_hat_f', 'y_hat_p', 'y_hat_fp')}
+    targets = []
     loss_sum, n_batches = 0.0, 0
 
     with torch.no_grad():
@@ -111,29 +115,38 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device):
 
             loss_sum += criterion(batch.y, y_hat, fusion_out, s_p, alpha_f, fusion)['total'].item()
             n_batches += 1
-            preds.append(y_hat.detach().cpu())
+            cols['y_hat'].append(y_hat.detach().cpu())
+            cols['y_hat_f'].append(fusion_out.y_hat_f.detach().cpu())
+            cols['y_hat_p'].append(fusion_out.y_hat_p.detach().cpu())
+            cols['y_hat_fp'].append(fusion_out.y_hat_fp.detach().cpu())
             targets.append(batch.y.detach().cpu())
 
-    p = torch.cat(preds).flatten()
     t = torch.cat(targets).flatten()
-
     ss_tot = ((t - t.mean()) ** 2).sum()
-    r2 = (1.0 - ((t - p) ** 2).sum() / ss_tot).item() if ss_tot > 0 else float('nan')
 
-    # Guard the degenerate case: a collapsed model predicts a constant, and
-    # torch.corrcoef then divides by a zero standard deviation and returns nan.
-    # Stage 1 hit exactly this at weight_decay=3e0.
-    if p.std() > 0 and t.std() > 0:
-        pearson = torch.corrcoef(torch.stack([p, t]))[0, 1].item()
-    else:
-        pearson = float('nan')
+    def _score(p):
+        r2 = (1.0 - ((t - p) ** 2).sum() / ss_tot).item() if ss_tot > 0 else float('nan')
+        # Guard the degenerate case: a collapsed model predicts a constant, and
+        # torch.corrcoef then divides by a zero standard deviation, returning nan.
+        # Stage 1 hit exactly this at weight_decay=3e0.
+        r = (torch.corrcoef(torch.stack([p, t]))[0, 1].item()
+             if p.std() > 0 and t.std() > 0 else float('nan'))
+        return r2, r, (p - t).abs().mean().item()
 
-    return {
-        'mae':       (p - t).abs().mean().item(),
-        'loss':      loss_sum / max(n_batches, 1),
-        'r2':        r2,
-        'pearson_r': pearson,
-    }
+    p_main = torch.cat(cols['y_hat']).flatten()
+    r2, pearson, mae = _score(p_main)
+
+    out = {'mae': mae, 'loss': loss_sum / max(n_batches, 1), 'r2': r2, 'pearson_r': pearson}
+    for name in ('y_hat_f', 'y_hat_p', 'y_hat_fp'):
+        b_r2, b_r, b_mae = _score(torch.cat(cols[name]).flatten())
+        out[f'r2_{name}'] = b_r2
+        out[f'pearson_{name}'] = b_r
+        out[f'mae_{name}'] = b_mae
+    # Std of the fused prediction against the target's. A value far below 1.0
+    # means the model has shrunk toward the mean rather than learned to rank.
+    out['pred_std'] = p_main.std().item()
+    out['target_std'] = t.std().item()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +400,12 @@ def main():
     print(f"[test] n={len(test_idx)} epoch={ckpt['epoch']}  "
           f"mae {test['mae']:.4f} ({test['mae'] * dataset.y_std:.3f} IQ) | "
           f"r2 {test['r2']:.4f} | r {test['pearson_r']:.4f} | loss {test['loss']:.4f}")
+    print(f"[test] branch r2 — fused {test['r2']:.4f} | "
+          f"fMRI-only {test['r2_y_hat_f']:.4f} | "
+          f"prot-only {test['r2_y_hat_p']:.4f} | "
+          f"joint-head {test['r2_y_hat_fp']:.4f}")
+    print(f"[test] pred_std {test['pred_std']:.4f} vs target_std {test['target_std']:.4f} "
+          f"(far below 1.0 = shrunk toward the mean)")
 
     summary = {
         'run_id':        run_id,
@@ -404,6 +423,12 @@ def main():
         'test_mae_iq':   round(test['mae'] * dataset.y_std, 6),
         'test_r2':       round(test['r2'], 6),
         'test_pearson_r': round(test['pearson_r'], 6),
+        # Branch scores: does the fusion beat its own inputs, or destroy them?
+        'test_r2_fmri_only':  round(test['r2_y_hat_f'], 6),
+        'test_r2_prot_only':  round(test['r2_y_hat_p'], 6),
+        'test_r2_joint_head': round(test['r2_y_hat_fp'], 6),
+        'test_pred_std':      round(test['pred_std'], 6),
+        'test_target_std':    round(test['target_std'], 6),
         'prot_ckpt':     str(PROT_CKPT),
         'fmri_ckpt':     str(FMRI_CKPT),
         'joint_dataset': str(JOINT_PT),
