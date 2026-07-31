@@ -500,8 +500,13 @@ class ConnectomeEncoder(nn.Module):
             h, edge_index, edge_attr=gat_edge,
             return_attention_weights=True,
         )                                                        # h: [N, 512]
-        # Detach before caching — we don't want this to keep the compute graph alive
-        self.last_attn = (attn_ei.detach(), attn_w.detach())    # [2,E], [E, heads]
+        # edge_index is detached (it is an index, never differentiated); alpha is
+        # NOT. Stage 2 reads self.last_attn[1] and puts it in l_sparse
+        # (fusion/training/losses.py), so detaching it there silently made the
+        # attention-sparsity term a constant with no gradient. Nothing in this
+        # Stage-1 script differentiates it, so the only local cost is that one
+        # batch's graph stays alive until the next forward overwrites the cache.
+        self.last_attn = (attn_ei.detach(), attn_w)             # [2,E], [E, heads]
         h = F.gelu(self.bn2(h))
         h = self.drop(h)
 

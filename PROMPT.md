@@ -112,14 +112,25 @@ for s in 1 2 3; do conda run --no-capture-output -n tcg_net python -u fusion/tra
 
 Then `cat fusion/training/checkpoints/test_metrics_fluid_iq_*.json`.
 
-**Item 6 — proteomics scaler refit.** `fusion/data/build_joint_dataset.py:266` is an
-explicit no-op (`_ = scaler`). The scaler was fit on the proteomics Stage-1 train
-fold, which overlapped joint val/test. Excluding subjects from Stage-1 *training*
-did not fix this. Last remaining leakage channel; expected to be small.
+**Item 6 — proteomics fit-set leakage. Code landed 2026-07-31, not yet run.**
+The fix is `preprocess.py --exclude-eids` (keep joint val/test participants out of
+the imputer/scaler fit), *not* a refit at the joint stage — refitting would have
+mismatched the frozen encoder's input distribution. `build_joint_dataset.py` now
+verifies it and logs `PREPROCESSING LEAKAGE` when it is still there. Before paying
+for a full re-preprocess, measure the channel (~seconds):
 
-**Item 12 — `l_sparse` has no gradient.** One line in
-`fmri/Code/train_fmri_stage1.py:504`: `self.last_attn = (attn_ei.detach(), attn_w)`.
-Shared file, so coordinate with the fMRI colleague.
+```bash
+conda run --no-capture-output -n tcg_net python -u fusion/data/check_scaler_leakage.py
+```
+
+If the verdict is "negligible", record the number and close item 6 without a
+re-run. If not, the two-pass order is in `FIX_PLAN.md` (build → preprocess
+`--exclude-eids` → build), and it costs a Stage-1 retrain and a Stage-2 rerun.
+
+**Item 12 — `l_sparse` had no gradient. Code landed 2026-07-31, not yet run.**
+`fmri/Code/train_fmri_stage1.py:504` no longer detaches the attention weights.
+Shared file: needs the fMRI colleague's sign-off and an fMRI Stage-1 re-run before
+merge. Inert in Stage-2 phase 1 (encoder frozen); only acts in phase 2.
 
 ---
 

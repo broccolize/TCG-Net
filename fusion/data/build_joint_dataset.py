@@ -10,9 +10,11 @@ Pipeline (executed in this exact order):
     4. Align both tensors row-by-row on the intersected EIDs.  The
        proteomics features in proteomics_tensor.pt were already scaled by
        scaler_1234.joblib during preprocessing; this step loads that
-       artefact to record its provenance and verifies no further
-       transformation is applied to the proteomics slice.  fMRI FC
-       features are stored as-is (vectorised upper triangle).
+       artefact, checks it matches the tensor, and applies no further
+       transformation to the proteomics slice.  fMRI FC features are
+       stored as-is (vectorised upper triangle).  The scaler is *not*
+       refit here — see the comment at step 4 for why, and step 5b for
+       the leakage check that replaces it.
     5. Generate a fresh 70/15/15 split over N_joint participants with
        SPLIT_SEED.  Entirely independent of the per-modality splits.
     6. For each target (age, fluid_iq): scan phesantallphenos CSVs for
@@ -277,17 +279,49 @@ def main() -> None:
             tuple(x_p_full.shape), eid_p.size, x_p_full.shape[1],
         )
 
-        # Step 4 (provenance): load scaler to record its path; the tensor
-        # already has the scaler's transform applied — do NOT call transform()
-        # again or the data will be double-scaled.
+        # Step 4 (provenance): load the scaler and check it against the tensor.
+        #
+        # The tensor already has this scaler's transform applied, so it must NOT
+        # be applied again here (that would double-scale the data), and it must
+        # not be refit on the joint train fold either: the frozen Stage-1
+        # encoder was trained in the coordinate system of *this* scaler, and the
+        # joint cohort is the imaging subcohort, whose mean/std differ from the
+        # full proteomics cohort. Rescaling at this point would trade a small
+        # leakage for a real train/inference mismatch.
+        #
+        # The leakage is therefore fixed upstream instead: preprocess.py
+        # --exclude-eids drops the joint val/test participants from the fit set
+        # of the imputer and the scaler. What this step does is *verify* that it
+        # happened — see Step 5b for the check itself.
         scaler = joblib.load(SCALER_PATH)
+        n_scaler_features = int(np.asarray(scaler.mean_).size)
+        if n_scaler_features != int(x_p_full.shape[1]):
+            raise RuntimeError(
+                f"Scaler artefact {SCALER_PATH} has {n_scaler_features} features "
+                f"but proteomics_tensor.pt has {x_p_full.shape[1]} — the tensor "
+                f"was not produced by this scaler."
+            )
         logger.info(
-            "Scaler loaded (provenance check only): %s — "
-            "already applied to proteomics_tensor.pt during preprocessing. "
-            "Not applied again here.",
-            SCALER_PATH,
+            "Scaler loaded for provenance: %s (%d features) — already applied to "
+            "proteomics_tensor.pt during preprocessing, not applied again here.",
+            SCALER_PATH, n_scaler_features,
         )
-        _ = scaler  # retained for audit; not called on x_p_full
+
+        prot_fit_excluded = bundle_p.get("fit_excluded_eids")
+        if prot_fit_excluded is None:
+            prot_fit_excluded_eids = np.empty(0, dtype=np.int64)
+        else:
+            prot_fit_excluded_eids = (
+                prot_fit_excluded.numpy().astype(np.int64)
+                if torch.is_tensor(prot_fit_excluded)
+                else np.asarray(prot_fit_excluded, dtype=np.int64)
+            )
+        logger.info(
+            "Preprocessing fit set: %d training EIDs were held out of the "
+            "imputer/scaler fit (source: %s).",
+            prot_fit_excluded_eids.size,
+            bundle_p.get("fit_exclude_eids_file"),
+        )
 
         # ------------------------------------------------------------------
         # Step 2: Load fMRI EIDs and FC feature matrix from corr_matrix.mat.
@@ -393,6 +427,54 @@ def main() -> None:
         )
 
         # ------------------------------------------------------------------
+        # Step 5b: Stage-1 exclusion list, and the preprocessing-provenance
+        # check that depends on it.
+        #
+        # Every participant in the joint val/test folds is evaluated on in
+        # Stage 2, so none of them may appear in a Stage-1 *training* set — the
+        # pretrained encoders would otherwise have already seen their labels
+        # through the aux head — and none of them may contribute to a fitted
+        # preprocessing statistic either. Written as EIDs rather than indices
+        # because the proteomics and fMRI Stage-1 cohorts have entirely
+        # different row spaces.
+        #
+        # Consumed by: train_stage1.py --exclude-eids, preprocess.py --exclude-eids
+        #
+        # This is the joint-level split, so it is a superset of each target's
+        # val/test set. Participants without a given target simply do not appear
+        # in that target's dataset, making the extra entries harmless no-ops.
+        # ------------------------------------------------------------------
+        exclude_eids = np.unique(
+            np.concatenate([joint_eids[val_idx], joint_eids[test_idx]])
+        ).astype(np.int64)
+
+        # Which of those actually sit in the proteomics training split? Only
+        # those could have leaked, and only those can be checked for.
+        prot_train_eids = eid_p[bundle_p["train_idx"].numpy().astype(np.int64)]
+        at_risk = np.intersect1d(exclude_eids, prot_train_eids.astype(np.int64))
+        unprotected = np.setdiff1d(at_risk, prot_fit_excluded_eids)
+        scaler_fit_leakage_free = bool(unprotected.size == 0)
+
+        if scaler_fit_leakage_free:
+            logger.info(
+                "Preprocessing provenance OK: all %d joint val/test participants "
+                "that sit in the proteomics training split were held out of the "
+                "imputer/scaler fit.",
+                at_risk.size,
+            )
+        else:
+            logger.warning(
+                "PREPROCESSING LEAKAGE: %d of the %d joint val/test participants "
+                "in the proteomics training split contributed to the "
+                "imputer/scaler statistics in %s. Re-run "
+                "proteomics/data/preprocess.py --exclude-eids %s, then re-run "
+                "this script. The joint split is deterministic in SPLIT_SEED and "
+                "the EID intersection, so the exclusion list will not change.",
+                unprotected.size, at_risk.size, PROCESSED_TENSOR_PATH,
+                STAGE1_EXCLUDE_EIDS_PATH,
+            )
+
+        # ------------------------------------------------------------------
         # Step 6: Load targets and compute y_0 for each target.
         # y_0 = mean of training labels, computed on training fold only.
         # ------------------------------------------------------------------
@@ -470,6 +552,9 @@ def main() -> None:
                     "test_idx": torch.from_numpy(target_test_idx),
                     "y_0": y_0,
                     "scaler_path": str(SCALER_PATH),
+                    # False means the proteomics normalisation statistics saw
+                    # participants this dataset is evaluated on (item 6).
+                    "scaler_fit_leakage_free": scaler_fit_leakage_free,
                     "fmri_source": str(CORR_MATRIX_PATH),
                     "n_fmri_features": n_fmri_features,
                     "split_seed": SPLIT_SEED,
@@ -512,22 +597,8 @@ def main() -> None:
         logger.info("Joint split file written: %s", SPLIT_JOINT_PATH)
 
         # ------------------------------------------------------------------
-        # Step 7b: Stage-1 exclusion list.
-        #
-        # Every participant in the joint val/test folds is evaluated on in
-        # Stage 2, so none of them may appear in a Stage-1 *training* set — the
-        # pretrained encoders would otherwise have already seen their labels
-        # through the aux head. Written as EIDs rather than indices because the
-        # proteomics and fMRI Stage-1 cohorts have entirely different row spaces.
-        #
-        # Consumed by: train_stage1.py --exclude-eids
-        #
-        # This is the joint-level split, so it is a superset of each target's
-        # val/test set. Participants without a given target simply do not appear
-        # in that target's dataset, making the extra entries harmless no-ops.
+        # Step 7b: write the Stage-1 exclusion list computed in step 5b.
         # ------------------------------------------------------------------
-        exclude_eids = np.concatenate([joint_eids[val_idx], joint_eids[test_idx]])
-        exclude_eids = np.unique(exclude_eids).astype(np.int64)
         np.save(STAGE1_EXCLUDE_EIDS_PATH, exclude_eids)
         logger.info(
             "Stage-1 exclusion list written: %s (%d EIDs = joint val %d + test %d). "
@@ -546,6 +617,10 @@ def main() -> None:
             "split_seed": SPLIT_SEED,
             "proteomics_tensor": str(PROCESSED_TENSOR_PATH),
             "scaler_artefact": str(SCALER_PATH),
+            "scaler_fit_leakage_free": scaler_fit_leakage_free,
+            "scaler_fit_excluded_eids": int(prot_fit_excluded_eids.size),
+            "joint_eval_eids_in_proteomics_train": int(at_risk.size),
+            "joint_eval_eids_in_scaler_fit": int(unprotected.size),
             "fmri_source": str(CORR_MATRIX_PATH),
             "n_proteomics": int(eid_p.size),
             "n_fmri": int(eid_f.size),

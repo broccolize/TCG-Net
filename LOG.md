@@ -10,6 +10,81 @@ needs doing.
 
 ---
 
+## 2026-07-31 — Item 6 (preprocessing fit-set leakage) and item 12 (attention gradient)
+
+Code only. **Nothing in this entry has been run**; both changes need a run before
+they mean anything, and neither may be merged until then.
+
+### Item 6 — the last leakage channel, fixed upstream rather than downstream
+
+`fusion/data/build_joint_dataset.py:266` used to read `_ = scaler`: the scaler was
+loaded, logged, and deliberately not used. The plan entry said to refit it on the
+joint train fold. **That would have been the wrong fix.** The frozen Stage-1
+proteomics encoder was trained in the coordinate system of `scaler_1234`, and the
+joint cohort is the imaging subcohort, whose per-protein means and stds are not
+the full proteomics cohort's. Refitting at the joint stage would have swapped a
+small label-free leakage for a genuine train/inference mismatch on the encoder's
+inputs.
+
+The leak is in the fit set, so it is fixed there:
+
+- `proteomics/data/preprocess.py` gains `--exclude-eids`, mirroring the flag
+  `train_stage1.py` already has. Listed participants are dropped from the fit set
+  of the KNNImputer, the residualizer and the StandardScaler (and from the
+  training median/mode used to fill age/sex). They are still imputed, still
+  scaled, still in the output tensor, still in their original split — only the
+  fitted statistics stop seeing them.
+- The tensor now carries `fit_idx`, `fit_excluded_eids` and
+  `fit_exclude_eids_file`; `scaler_<seed>.npz` carries the fit-row counts.
+- `build_joint_dataset.py` checks it instead of asserting it. It intersects the
+  joint val/test EIDs with the proteomics train split, subtracts what the tensor
+  says was held out, and logs `Preprocessing provenance OK` or
+  `PREPROCESSING LEAKAGE: n of m ...`. The verdict is written into both joint
+  dataset bundles as `scaler_fit_leakage_free` and into the build JSON.
+
+This needs two passes to converge (build → preprocess → build); it terminates
+after one loop because the joint split depends only on `SPLIT_SEED` and the EID
+intersection, which the preprocessing values do not touch. The order is written
+out in `FIX_PLAN.md`.
+
+**Measure before paying for it.** Pass 2 is a full KNN imputation over ~37k × 2920.
+`fusion/data/check_scaler_leakage.py` (new) answers whether that is worth doing,
+in seconds and without touching the raw CSV: `proteomics_tensor.pt` is already
+z-scored, so the scaler that *would* have been fit on the clean subset is
+recoverable as that subset's mean/std **in the current z coordinates**. It reports
+the per-feature shift and the resulting change in encoder input, in SD units, for
+the participants Stage 2 evaluates on. It does not cover the KNNImputer's donor
+pool — that cannot be measured without re-imputing — but under 5% of cells are
+imputed, so the scaler channel is the larger one by cell count.
+
+### Item 12 — `l_sparse` had no gradient
+
+`fmri/Code/train_fmri_stage1.py:504` cached `attn_w.detach()`. Stage 2 reads
+`fmri_enc.last_attn[1]` and puts it straight into `l_sparse`
+(`fusion/training/losses.py:37`), so the attention-sparsity term has been a
+constant. Now only `edge_index` is detached.
+
+Scope of the change: nothing in the fMRI Stage-1 script differentiates
+`last_attn`, so locally the only cost is that one batch's graph stays alive until
+the next forward overwrites the cache. In Stage 2 it is inert during phase 1 as
+well — the fMRI encoder is frozen there — so this only starts acting in phase 2.
+`train_fmri_stage1_alt1.py` and `_alt2.py` still detach; left alone deliberately,
+they are the colleague's alternates and feed nothing in `fusion/`.
+
+**This is a shared file.** It needs the fMRI colleague's sign-off, and an fMRI
+Stage-1 re-run, before merge.
+
+### Verified
+
+`resolve_fit_positions` was exercised on synthetic inputs (no exclusion; overlapping
+and non-overlapping EIDs; duplicates; a non-contiguous `train_idx`; a missing file;
+and an exclusion that would empty the fit set — the last two raise rather than
+silently proceed). All three edited files byte-compile. That is the limit of what
+is checkable off the server: `sklearn` and `torch` are not installed locally, and
+none of the data is here.
+
+---
+
 ## Current state — updated 2026-07-30, end of session
 
 **Branch:** `fix/critical-early-stopping-and-phi-int` — 12 commits, pushed,

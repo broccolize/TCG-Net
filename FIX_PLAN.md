@@ -19,7 +19,7 @@ wastes hours of compute.
 | 3 | Make `PROT_CKPT` target-specific; assert `ckpt['config']['target'] == target` | `fusion/training/train_stage2_age.py:73,109` | no | ✅ **done 2026-07-30** |
 | 4 | Joint targets → instance 2 (`21003-2.0` / `20016-2.0`). Proteomics Stage 1 deliberately **stays** instance 0 — see LOG 2026-07-30 | `fusion/data/build_joint_dataset.py` | rebuild | ✅ **done 2026-07-30** |
 | 5 | Split strategy — **option C** applied. Measured cost: R² 0.1132 → 0.1066, t ≈ 1.3, not significant | `fusion/data/build_joint_dataset.py:365` | yes | ✅ **done 2026-07-30** (proteomics side; fMRI side still pending) |
-| 6 | Refit the proteomics scaler/imputer on the joint train fold (line 266 is currently an explicit no-op) | `fusion/data/build_joint_dataset.py:259-266` | yes | ⬜ |
+| 6 | Keep the joint val/test participants out of the proteomics imputer/scaler **fit set** — `preprocess.py --exclude-eids`, verified in the joint build (the old no-op at line 266 is gone) | `proteomics/data/preprocess.py`, `fusion/data/build_joint_dataset.py` | yes | 🟡 **code done 2026-07-31, not yet run.** Measure first with `fusion/data/check_scaler_leakage.py` — see LOG |
 | 7 | Raise `WEIGHT_DECAY` above 1e-5 for fluid IQ | `proteomics/config.py` | yes | ✅ **done 2026-07-30** — 1e-1 established by sweep; pass explicitly, config default unchanged for age |
 | 8 | Aggregate **final-epoch** CV metrics, not best-epoch (fluid IQ sign flips: +0.059 → −0.084) | `proteomics/training/cv_stage1.py:302,439` | recompute | ⬜ |
 | 9 | Actually evaluate `test_loader` — 799 age / 249 fluid IQ held-out subjects unused | `fusion/training/train_stage2.py:97` | no |✅ **done 2026-07-30** |
@@ -30,7 +30,7 @@ wastes hours of compute.
 
 | # | Fix | Where | Status |
 |---|---|---|---|
-| 12 | Stop detaching GAT attention so `l_sparse` has a gradient: `self.last_attn = (attn_ei.detach(), attn_w)` | `fmri/Code/train_fmri_stage1.py:500` | ⬜ |
+| 12 | Stop detaching GAT attention so `l_sparse` has a gradient: `self.last_attn = (attn_ei.detach(), attn_w)` | `fmri/Code/train_fmri_stage1.py:504` | 🟡 **code done 2026-07-31, not yet run.** Shared file — needs the fMRI colleague's sign-off before merge. Only bites in Stage-2 phase 2; the encoder is frozen in phase 1. `_alt1.py`/`_alt2.py` still detach |
 | 13 | `.eval()` on frozen encoders while `phase == 1` — `requires_grad_(False)` does not stop BatchNorm buffer updates or dropout | `fusion/training/train_stage2.py:165` |✅ **done 2026-07-30** |
 | 14 | Seed Stage 2 — no `set_global_seeds`, no `DataLoader(generator=...)` anywhere | `fusion/training/train_stage2*.py` |✅ **done 2026-07-30** |
 | 15 | **Write and commit an age variant of `train_fmri_stage1.py`.** Now blocking: the colleague's re-run produced only fluid-IQ encoders, and the old `fmri_stage1_age_encoder.pt` was trained on pre-fix graph features. Age Stage 2 cannot run until this exists | `fmri/Code/` | ⬜ **blocking** |
@@ -94,9 +94,26 @@ Confirmed unaffected by the upstream change: `FLUID_IQ_COL = '20016-2.0'`
 1. **Code-only batch** — 1 ✅, 3 ✅, then 7, 8, 9, 12, 13, 14, 16.
 2. **Item 5** — the split-strategy decision (option C recommended above). It is
    the only genuine judgement call in the list.
-3. **Items 4 + 6** — rebuild the joint datasets with instance-2 labels and a refit
-   scaler. Under option C this now comes **before** the final Stage-1 runs,
-   because it produces the exclusion list.
+3. **Items 4 + 6** — rebuild the joint datasets with instance-2 labels and a
+   leakage-free scaler. Under option C this now comes **before** the final
+   Stage-1 runs, because it produces the exclusion list.
+
+   Item 6 needs two passes, because the exclusion list and the preprocessing
+   artefacts each depend on the other:
+
+   1. `build_joint_dataset.py` → writes `stage1_exclude_eids_1234.npy` and
+      warns `PREPROCESSING LEAKAGE`.
+   2. `preprocess.py --exclude-eids <that file>` → refits the imputer/scaler
+      without those participants.
+   3. `build_joint_dataset.py` again → the warning becomes
+      `Preprocessing provenance OK`.
+
+   It terminates after one loop: the joint split depends only on `SPLIT_SEED`
+   and the proteomics ∩ fMRI EID intersection, neither of which the
+   preprocessing values change, so pass 3 writes an identical exclusion list.
+   Pass 2 is the expensive one (full KNN imputation) — run
+   `fusion/data/check_scaler_leakage.py` first to see whether the channel is
+   large enough to be worth it.
 4. **Item 2** — final Stage-1 retrains, excluding joint val/test subjects.
 5. **Delete the graph-feature caches** (item 22) — otherwise the stale cache is
    silently reloaded and both the leakage fix and the colleague's z-score

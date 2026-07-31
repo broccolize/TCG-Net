@@ -17,14 +17,17 @@ Pipeline (executed in this exact order):
        deterministically across stages.
     4. Fit ``sklearn.impute.KNNImputer`` on training rows only and
        transform the three splits separately. Persist the fitted imputer.
+       With ``--exclude-eids``, the listed participants are additionally
+       dropped from the fit set (they are still imputed, scaled and kept
+       in the output tensor) — see ``resolve_fit_positions``.
     5. (Optional, ``--residualize``) Fit a per-protein
        ``sklearn.linear_model.LinearRegression`` on the training split
        against covariates identified from the CSV header (matching the
        categories age, sex, batch, plate, fasting time, assay warning
        flags as closely as possible). Subtract predicted values to
        obtain residuals. Persist coefficients.
-    6. Fit ``sklearn.preprocessing.StandardScaler`` on training rows
-       only and transform the three splits. Persist scaler object and
+    6. Fit ``sklearn.preprocessing.StandardScaler`` on the same fit set
+       and transform the three splits. Persist scaler object and
        mean/std arrays.
     7. Reconstruct the full processed matrix in original EID order and
        save it to ``data/proteomics_tensor.pt``.
@@ -158,7 +161,101 @@ def parse_args() -> argparse.Namespace:
         default=KNN_NEIGHBORS,
         help="Number of neighbours used by the KNNImputer.",
     )
+    parser.add_argument(
+        "--exclude-eids",
+        type=Path,
+        default=None,
+        dest="exclude_eids",
+        help=(
+            "Path to a .npy array of EIDs that must not influence any fitted "
+            "preprocessing statistic. Rows with these EIDs are dropped from the "
+            "fit set of the KNNImputer, the residualizer and the StandardScaler "
+            "(they are still transformed and still appear in the output tensor, "
+            "in their original split). Use the file written by "
+            "fusion/data/build_joint_dataset.py "
+            "(stage1_exclude_eids_<seed>.npy) so that no participant Stage 2 "
+            "evaluates on contributes to the normalisation statistics."
+        ),
+    )
     return parser.parse_args()
+
+
+def resolve_fit_positions(
+    train_idx: np.ndarray,
+    eid_array: np.ndarray,
+    exclude_path: Path | None,
+    logger,
+) -> tuple[np.ndarray, dict]:
+    """
+    Return the positions *within* ``train_idx`` that may be used to fit
+    preprocessing statistics, plus a stats dict for the JSON log.
+
+    Every fitted transform in this script (imputer, residualizer, scaler) is fit
+    on training rows only. That is not sufficient on its own: the Stage-2 joint
+    val/test participants are a subset of the proteomics cohort, and roughly 70%
+    of them land in this training split. Their protein values would otherwise
+    enter the imputer's donor pool and the scaler's mean/std, which is a
+    (feature-only, label-free) leakage channel into every Stage-2 evaluation.
+
+    Excluded rows are *not* removed from the dataset — they keep their split
+    membership and are transformed with the exclusion-free statistics. Only the
+    fit sets shrink.
+    """
+    stats: dict = {
+        "fit_exclusion_applied": False,
+        "fit_exclude_eids_file": None,
+        "fit_exclude_eids_total": 0,
+        "fit_exclude_eids_matched_train": 0,
+        "fit_rows": int(train_idx.size),
+        "train_rows": int(train_idx.size),
+    }
+
+    if exclude_path is None:
+        logger.warning(
+            "No --exclude-eids given. The imputer and scaler will be fit on the "
+            "full training split, which includes Stage-2 joint val/test "
+            "participants. Acceptable for a first/diagnostic build; the final "
+            "artefacts should be produced with the exclusion list written by "
+            "fusion/data/build_joint_dataset.py."
+        )
+        return np.arange(train_idx.size), stats
+
+    if not exclude_path.exists():
+        raise FileNotFoundError(
+            f"--exclude-eids file not found: {exclude_path}. It is written by "
+            "fusion/data/build_joint_dataset.py, which must be run first."
+        )
+
+    exclude_eids = np.load(exclude_path).astype(np.int64)
+    train_eids = eid_array[train_idx].astype(np.int64)
+    banned = np.isin(train_eids, exclude_eids)
+    fit_pos = np.flatnonzero(~banned)
+
+    logger.info(
+        "Fit exclusion: %d EIDs listed in %s; %d of them fall in the training "
+        "split. Fit set for imputer/residualizer/scaler: %d of %d training rows "
+        "(%.2f%% removed).",
+        exclude_eids.size,
+        exclude_path,
+        int(banned.sum()),
+        fit_pos.size,
+        train_idx.size,
+        100.0 * float(banned.sum()) / max(int(train_idx.size), 1),
+    )
+    if fit_pos.size == 0:
+        raise ValueError(
+            "The exclusion list removed every training row — refusing to fit "
+            "preprocessing statistics on an empty set."
+        )
+
+    stats.update(
+        fit_exclusion_applied=True,
+        fit_exclude_eids_file=str(exclude_path),
+        fit_exclude_eids_total=int(exclude_eids.size),
+        fit_exclude_eids_matched_train=int(banned.sum()),
+        fit_rows=int(fit_pos.size),
+    )
+    return fit_pos, stats
 
 
 def identify_covariate_columns(
@@ -436,16 +533,26 @@ def main() -> None:
         )
         logger.info("Split indices written: %s", split_path)
 
-        # Step 8: KNN imputation. Fit on training rows only.
+        # Step 7b: restrict the *fit* set to training rows that are not
+        # evaluated on downstream (see resolve_fit_positions).
+        fit_pos, exclusion_stats = resolve_fit_positions(
+            train_idx, eid_array, args.exclude_eids, logger
+        )
+        fit_idx = train_idx[fit_pos]
+        excluded_train_eids = np.setdiff1d(
+            eid_array[train_idx].astype(np.int64), eid_array[fit_idx].astype(np.int64)
+        )
+
+        # Step 8: KNN imputation. Fit on the training fit set only.
         x_train = x_raw[train_idx]
         x_val = x_raw[val_idx]
         x_test = x_raw[test_idx]
 
         imputer = KNNImputer(n_neighbors=args.knn_neighbors)
-        imputer.fit(x_train)
+        imputer.fit(x_raw[fit_idx])
         logger.info(
-            "KNNImputer(n_neighbors=%d) fit on TRAIN split only.",
-            args.knn_neighbors,
+            "KNNImputer(n_neighbors=%d) fit on %d TRAIN rows (of %d).",
+            args.knn_neighbors, fit_idx.size, train_idx.size,
         )
 
         x_train_imp = imputer.transform(x_train)
@@ -501,8 +608,9 @@ def main() -> None:
                 n_missing_total = int(np.isnan(col_array).sum())
 
                 # Fill strategy is determined by the column type.
-                # Stats are computed on training rows ONLY to prevent leakage.
-                train_col_vals = col_array[train_idx]
+                # Stats are computed on the training fit set ONLY (training rows
+                # minus any --exclude-eids) to prevent leakage.
+                train_col_vals = col_array[fit_idx]
                 if col == "21003-0.0":          # age — fill with training median
                     fill_method = "training-set median"
                     fill_val = float(np.nanmedian(train_col_vals))
@@ -564,8 +672,13 @@ def main() -> None:
                 cov_val = cov_matrix[val_idx]
                 cov_test = cov_matrix[test_idx]
 
-                resid_model = fit_residualizer(x_train_imp, cov_train)
-                logger.info("LinearRegression residualizer fit on TRAIN split only.")
+                resid_model = fit_residualizer(
+                    x_train_imp[fit_pos], cov_train[fit_pos]
+                )
+                logger.info(
+                    "LinearRegression residualizer fit on %d TRAIN rows (of %d).",
+                    fit_pos.size, train_idx.size,
+                )
 
                 x_train_imp = x_train_imp - resid_model.predict(cov_train)
                 x_val_imp = x_val_imp - resid_model.predict(cov_val)
@@ -601,8 +714,11 @@ def main() -> None:
         # Step 10: standardise. Fit on (post-residualization, if any) training
         # rows only.
         scaler = StandardScaler()
-        scaler.fit(x_train_imp)
-        logger.info("StandardScaler fit on TRAIN split only.")
+        scaler.fit(x_train_imp[fit_pos])
+        logger.info(
+            "StandardScaler fit on %d TRAIN rows (of %d).",
+            fit_pos.size, train_idx.size,
+        )
 
         x_train_z = scaler.transform(x_train_imp)
         x_val_z = scaler.transform(x_val_imp)
@@ -617,6 +733,10 @@ def main() -> None:
             mean=scaler.mean_,
             std=scaler.scale_,
             feature_names=np.array(feature_names, dtype=object),
+            # Provenance: which rows these statistics were estimated from.
+            n_fit_rows=np.int64(fit_idx.size),
+            n_train_rows=np.int64(train_idx.size),
+            n_fit_excluded=np.int64(excluded_train_eids.size),
         )
         logger.info("Scaler artefacts written: %s, %s", scaler_joblib_path, scaler_npz_path)
 
@@ -634,6 +754,17 @@ def main() -> None:
                 "train_idx": torch.from_numpy(train_idx.astype(np.int64)),
                 "val_idx": torch.from_numpy(val_idx.astype(np.int64)),
                 "test_idx": torch.from_numpy(test_idx.astype(np.int64)),
+                # Rows the imputer/residualizer/scaler were actually fit on, and
+                # the training EIDs deliberately kept out of that fit. Consumed by
+                # fusion/data/build_joint_dataset.py to verify that no Stage-2
+                # evaluation participant influenced the preprocessing statistics.
+                "fit_idx": torch.from_numpy(fit_idx.astype(np.int64)),
+                "fit_excluded_eids": torch.from_numpy(
+                    excluded_train_eids.astype(np.int64)
+                ),
+                "fit_exclude_eids_file": (
+                    str(args.exclude_eids) if args.exclude_eids is not None else None
+                ),
             },
             PROCESSED_TENSOR_PATH,
         )
@@ -653,6 +784,7 @@ def main() -> None:
             "imputer_fit_split": "train",
             "normalisation_method": normalisation_method,
             "scaler_fit_split": "train",
+            "fit_set": exclusion_stats,
             "output_shape": [int(n_rows), int(n_features)],
             "output_file": str(PROCESSED_TENSOR_PATH),
             "normalisation_statistics_file": str(scaler_npz_path),
