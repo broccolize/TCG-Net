@@ -32,6 +32,8 @@ directory and conda environment to run it from (normally `~/TCG-Net` and
 - [`LOG.md`](LOG.md) — dated log of every change made. Append a new entry at the
   top for each working session; keep it self-contained enough to be read with no
   prior conversation context.
+- [`PROMPT.md`](PROMPT.md) — session handoff: current state, open decisions, and
+  the traps specific to this project. Read this first after a context reset.
 - [`FIX_PLAN.md`](FIX_PLAN.md) — prioritised list of outstanding defects. Tick
   items off there when they land in `LOG.md`.
 

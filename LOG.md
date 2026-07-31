@@ -2,39 +2,54 @@
 
 Dated record of code changes made while working through the review findings.
 Newest entry first. Written to be self-contained: if you are picking this up with
-no prior context, read [Current state](#current-state) then the latest entry.
+no prior context, read [`PROMPT.md`](PROMPT.md) first, then the latest entry here.
 
-Companion file: [`FIX_PLAN.md`](FIX_PLAN.md) — the full prioritised list of what
-still needs doing.
+Companion files: [`PROMPT.md`](PROMPT.md) — session handoff and the open
+decisions. [`FIX_PLAN.md`](FIX_PLAN.md) — the full prioritised list of what still
+needs doing.
 
 ---
 
-## Current state
+## Current state — updated 2026-07-30, end of session
 
-**Branch:** `fix/critical-early-stopping-and-phi-int` (off `main` @ `fd6030a`)
+**Branch:** `fix/critical-early-stopping-and-phi-int` — 12 commits, pushed,
+**not merged to `main`**.
 
 **What is trustworthy right now**
 
 | Result | Status |
 |---|---|
-| Proteomics Stage 1 — **age** (test R² 0.868, MAE 2.35 yr) | ✅ verified clean, safe to report |
-| Proteomics Stage 1 — **fluid IQ** (R² 0.047) | ❌ model never learned; peaked at epoch 1 |
-| Proteomics **CV** summary | ⚠️ reports best-epoch, not final-epoch. Fluid IQ sign is wrong: reports **+0.059**, actual **−0.084** |
-| All **Stage 2 / fusion** results | ❌ do not report — see `FIX_PLAN.md` |
-| `fusion/analysis/` figures + CSVs | ❌ regenerate after re-running Stage 2 |
+| Proteomics Stage 1 — **age** (test R² 0.868) | ✅ verified clean, safe to report. Not retrained; still instance-0, which is correct for baseline bloods |
+| Proteomics Stage 1 — **fluid IQ** (test R² **0.107 ± 0.009**) | ✅ retrained, early-stopped, wd=1e-1, leakage-free |
+| Stage 2 — **fluid IQ** (held-out test R² **0.068**, n=747) | ✅ honest number, but see the verdict below |
+| Proteomics **CV** summary | ❌ still reports best-epoch. Fluid IQ sign is wrong: **+0.059** reported vs **−0.084** actual (item 8) |
+| Stage 2 — **age** | ❌ blocked: no committed script produces an age fMRI encoder (item 15) |
+| `fusion/analysis/` figures + CSVs | ❌ still uncommitted on the server, and generated from the dead `phi_int` (items 18/19) |
+
+**The scientific verdict.** The pipeline is now correct; the result is that the
+central claim is not supported for fluid IQ:
+
+```
+fused 0.0683 | fMRI-only 0.0669 | prot-only -0.0007 | joint-head 0.0689
+```
+
+The fusion adds 0.0014 over fMRI alone, and `joint-head` — a plain MLP on
+concatenated embeddings, i.e. a naive-fusion baseline already inside the model —
+matches the gated output. Proteomics carries r ≈ 0.17 (weak, not absent). See
+`PROMPT.md` for the decisions this forces.
 
 **Four root causes behind almost every finding**
 
 1. The proteomics fluid-IQ encoder never trained (no early stopping) — and *both*
-   Stage-2 runs load it, including the age run.
+   Stage-2 runs loaded it. **Fixed.**
 2. `phi_int` was mathematically always zero, killing the Shapley interaction value,
    the `l_shapley` term, and every interpretability output built on them.
-3. Splits are drawn fresh at each stage instead of carried through, so Stage-1
-   training subjects land in Stage-2 validation.
-4. Nothing validates what it loads — checkpoint target, label instance, test-set
-   evaluation, or seeding.
-
-Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
+   **Fixed and verified live.**
+3. Splits drawn fresh at each stage, so Stage-1 training subjects landed in
+   Stage-2 validation. **Fixed on the proteomics side** (`--exclude-eids`); the
+   fMRI side and the scaler artefact (item 6) are still open.
+4. Nothing validated what it loaded. **Fixed** — checkpoint-target assertion,
+   seeding, held-out test evaluation, instance-2 labels.
 
 ---
 
