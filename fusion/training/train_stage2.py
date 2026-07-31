@@ -404,6 +404,10 @@ def main():
           f"fMRI-only {test['r2_y_hat_f']:.4f} | "
           f"prot-only {test['r2_y_hat_p']:.4f} | "
           f"joint-head {test['r2_y_hat_fp']:.4f}")
+    print(f"[test] branch r  — fused {test['pearson_r']:.4f} | "
+          f"fMRI-only {test['pearson_y_hat_f']:.4f} | "
+          f"prot-only {test['pearson_y_hat_p']:.4f} | "
+          f"joint-head {test['pearson_y_hat_fp']:.4f}")
     print(f"[test] pred_std {test['pred_std']:.4f} vs target_std {test['target_std']:.4f} "
           f"(far below 1.0 = shrunk toward the mean)")
 
@@ -427,6 +431,12 @@ def main():
         'test_r2_fmri_only':  round(test['r2_y_hat_f'], 6),
         'test_r2_prot_only':  round(test['r2_y_hat_p'], 6),
         'test_r2_joint_head': round(test['r2_y_hat_fp'], 6),
+        # Pearson r alongside R^2: a shrunk branch can rank well (r > 0) while
+        # scoring R^2 ~ 0, so R^2 alone reads as "no signal" when there is some.
+        # The proteomics branch is exactly this case (R^2 -0.0007, r ~ 0.17).
+        'test_pearson_fmri_only':  round(test['pearson_y_hat_f'], 6),
+        'test_pearson_prot_only':  round(test['pearson_y_hat_p'], 6),
+        'test_pearson_joint_head': round(test['pearson_y_hat_fp'], 6),
         'test_pred_std':      round(test['pred_std'], 6),
         'test_target_std':    round(test['target_std'], 6),
         'prot_ckpt':     str(PROT_CKPT),

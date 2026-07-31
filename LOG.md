@@ -38,6 +38,87 @@ Root causes 1 and 2 are addressed below. **3 and 4 are still open.**
 
 ---
 
+## 2026-07-30 — Held-out Stage 2 result, and why the proteomics branch is flat
+
+First genuinely held-out Stage-2 numbers (n=747), plus a decomposition of where
+the proteomics signal goes.
+
+### Test result
+
+```
+[test] n=747 epoch=10  mae 0.7851 (1.621 IQ) | r2 0.0683 | r 0.2661
+[test] branch r2 — fused 0.0683 | fMRI-only 0.0669 | prot-only -0.0007 | joint-head 0.0689
+[test] pred_std 0.2194 vs target_std 1.0122
+```
+
+**Essentially all of the joint model's performance is the fMRI branch.** Fused
+(0.0683) is indistinguishable from fMRI-only (0.0669); the proteomics branch
+scores the same as predicting the mean.
+
+> [!important] `w_p` is not a measure of predictive contribution
+> The gate reports `w_p ≈ 0.55` while the proteomics branch scores R² ≈ 0. The
+> gate is a softmax over Shapley values derived from the sub-head outputs and can
+> assign a high weight to a branch that predicts nothing. `Session4_Age.md` read
+> this quantity as evidence of proteomic importance. It is not.
+
+Shrinkage is near-optimal rather than pathological: r² = 0.0708 against R² =
+0.0683, so the model is calibrated — it simply has little to say.
+
+### Where the proteomics signal goes
+
+Stage-1 encoder scored on the joint test subjects against both label versions:
+
+| Proteomics → fluid IQ | Pearson r |
+|---|---|
+| Full proteomics cohort, instance-0 (Stage-1 test) | **0.345** |
+| Joint/imaging cohort, instance-0 | **0.254** — cohort restriction costs 0.09 |
+| Joint/imaging cohort, instance-2 | **0.171** — 9-year gap costs a further 0.08 |
+
+The second step is fully explained by measurement attenuation:
+0.254 × 0.636 (instance-0/instance-2 test-retest on these subjects, n=229) =
+**0.162**, against 0.171 observed. Nothing unexplained in the target switch.
+
+So proteomics **does** carry signal for instance-2 fluid IQ — r ≈ 0.17 — it is
+just weak, and an optimally-scaled r=0.17 predictor caps out at R² = 0.029. The
+earlier reading of "contributes nothing" was too strong: it contributes little,
+and the fusion extracts even less.
+
+### The tension this exposes
+
+| | instance-0 | instance-2 |
+|---|---|---|
+| proteomics r | 0.254 | 0.171 |
+| fMRI encoder | trained on instance-2 (mismatched) | matched |
+| joint cohort | 1,754 | 4,950 |
+
+There is no configuration where both modalities are at their best, because the
+blood was drawn ~9 years before the scan. That is a property of UK Biobank, not
+of the code, and belongs in the methods.
+
+### Weight decay is inert at the current schedule
+
+The wd sweep (1e-3 → 3e-1, a 300× range) moved val MAE by 0.0001 and every run
+stopped at `best_epoch = 10`. AdamW's decoupled decay shrinks weights by
+`(1 − lr·wd)` per step; at lr=1e-4 and wd=3e-1 over 10 epochs × 108 batches that
+is a 3% total shrinkage, and at wd=1e-3 it is 0.0001%. The flag works — there is
+simply no room for it to act. Re-sweep only if the epoch schedule changes.
+
+### Phase 1 is not truncated; Phase 2 degrades
+
+val_r2 plateaus at 0.074–0.078 by **epoch 2–3** and oscillates for the next seven.
+`best_epoch = 10` is the low point of a flat noisy curve, not the end of a rising
+one. Phase 2 makes it worse immediately: 0.0767 → 0.0710 → 0.0668.
+
+### Correction recorded
+
+Earlier entries converted MAE to R² assuming Gaussian residuals (e.g. "val
+R² ≈ 0.17"). That is wrong here — fluid IQ is integer-valued and the shrunk
+predictor gives leptokurtic residuals, so MAE runs lower than a Gaussian of the
+same variance implies. True val R² is 0.077. **Use the reported R², never a
+conversion from MAE.**
+
+---
+
 ## 2026-07-30 — Stage 2: test evaluation, real freeze, seeding, argparse
 
 Five fixes to `fusion/training/train_stage2.py`, all needed before any Stage-2
