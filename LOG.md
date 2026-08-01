@@ -12,6 +12,14 @@ needs doing.
 
 ## 2026-08-01 — Stage-2 multi-seed: the fusion null was a single-seed artefact
 
+> [!caution] SUPERSEDED the same day — every run below was undertrained
+> `--phase2-epoch` defaults to 11, so phase 1 was cut off at epoch 10. Re-running
+> with phase 2 disabled, the best epoch lands at **52–57**. All four runs in this
+> entry stopped roughly two-thirds of the way through training, and the branch
+> contrasts below were measuring **which branch converges fastest**, not which
+> performs better. Both headline contrasts reverse or vanish at convergence. Keep
+> this entry for the record; do not quote its numbers. See the entry above it.
+
 Four runs carrying the branch decomposition (seeds 42, 1, 2, 3; wd=1e-3; same
 joint split, same encoders, stale-but-consistent graph features). **Two of the
 three conclusions drawn from the single seed-42 run are wrong.**
