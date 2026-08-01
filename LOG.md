@@ -10,6 +10,60 @@ needs doing.
 
 ---
 
+## 2026-08-01 (night) — `--init-heads` is a null; the problem is the representations
+
+Three seeds with `H_p` warm-started from the Stage-1 aux head, paired against the
+same seeds at random init:
+
+| branch | per seed | mean | signs |
+|---|---|---|---|
+| **prot-only** (the warm-started one) | −0.0054, −0.0035, −0.0030 | **−0.0040** | **0/3** |
+| fused | +0.0029, +0.0104, −0.0013 | +0.0040 | 2/3 |
+| joint-head | −0.0070, +0.0008, −0.0058 | −0.0040 | 1/3 |
+
+**The warm start made the proteomics branch slightly worse, on every seed.** The
+hypothesis from the previous entry is not supported.
+
+The reason is straightforward in hindsight: `H_p` stays trainable throughout
+phase 1, so after 57–79 epochs on 3,471 joint-train subjects it converges wherever
+the joint objective takes it and the initialisation washes out. Warm-starting only
+preserves pretraining if the head is also frozen or regularised toward its
+pretrained weights. Initialisation alone does nothing.
+
+### So the gap is not the readout — it is the encoders
+
+With 11 independent runs the internal picture is actually *stronger* than before:
+
+| contrast | mean | signs | t (df=10) |
+|---|---|---|---|
+| fused − fMRI-only | +0.0073 | 9/11 | +3.82 |
+| joint-head − fused | −0.0060 | 1/11 | −4.19 |
+| **calibrated fused − fMRI-only** | **+0.0103** | **11/11** | — |
+
+The gate beats naive concatenation on 10 of 11 seeds and beats its own fMRI
+branch on 11 of 11 after calibration. **Internally, the fusion module works.**
+
+But externally it still loses:
+
+```
+Stage-2 fused, calibrated   0.0768
+ridge_fmri pretrained       0.0818
+late fusion pretrained (M4) 0.1035     <- shortfall -0.0267 R2, -25.8% relative
+```
+
+Ridge on 2,145 raw FC edges fitted on 30,511 subjects beats a GNN that compresses
+the same connectome to 128 dimensions. That points at the **representations**, not
+the fusion layer: a 128-d bottleneck trained on a smaller labelled set is losing
+information that the raw edge weights retain. The auxiliary branch heads are also
+not trained to be good single-modality predictors — they carry `lambda_aux=0.3`
+inside a joint objective — so `fMRI-only 0.0652` is not a fair standalone M2
+either.
+
+Both facts push the same way: the honest external comparison is fused-vs-M4, and
+that one is currently lost by a quarter.
+
+---
+
 ## 2026-08-01 (evening, later) — Fair baselines beat the architecture. Headline retracted.
 
 `baseline_pretrained.py` gives ridge the same pretraining cohort the encoders
