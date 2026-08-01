@@ -76,7 +76,35 @@ def main() -> None:
         return
 
     kept = [r for r in runs if int(r.get("best_epoch", 0)) >= args.min_epoch]
-    print(f"{len(runs)} run(s) found, {len(kept)} kept (best_epoch >= {args.min_epoch})\n")
+
+    # Deduplicate. Training is seeded and reproducible, so re-running the same
+    # seed writes a new run_id with byte-identical metrics. Counting those twice
+    # doubles the apparent n and inflates every t-statistic — which is exactly
+    # what happened on 2026-08-01, when a 3-seed contrast was reported as df=5.
+    seen: dict[tuple, str] = {}
+    unique, dupes = [], []
+    for r in kept:
+        key = (
+            r.get("seed"), r.get("best_epoch"),
+            round(float(r.get("test_r2", float("nan"))), 6),
+            round(float(r.get("test_r2_fmri_only", float("nan"))), 6),
+        )
+        if key in seen:
+            dupes.append((r.get("run_id", "?"), seen[key]))
+        else:
+            seen[key] = r.get("run_id", "?")
+            unique.append(r)
+
+    print(f"{len(runs)} run(s) found, {len(kept)} kept (best_epoch >= {args.min_epoch})")
+    if dupes:
+        print(
+            f"  {len(dupes)} exact duplicate(s) dropped — same seed, identical "
+            f"metrics (deterministic re-run), so they carry no extra information:"
+        )
+        for dup, orig in dupes:
+            print(f"    {dup}  ==  {orig}")
+    print(f"  {len(unique)} independent run(s) used for statistics\n")
+    kept = unique
 
     hdr = (
         f"{'run_id':<26}{'seed':>5}{'ep':>5}{'wd':>8}"
