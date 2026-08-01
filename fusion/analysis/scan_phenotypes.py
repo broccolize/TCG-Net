@@ -120,26 +120,51 @@ def do_list(pattern: str | None) -> None:
     print("\nPick a column and re-run with --column <name> to get joint-cohort coverage.")
 
 
-def do_column(column: str, target: str) -> None:
+# The instance-2 cognitive battery — administered AT the imaging visit, so
+# contemporaneous with the connectome. Candidates for a composite g-factor, which
+# would be more reliable than 20016-2.0 alone (test-retest 0.636 on this cohort)
+# and would raise the attenuation ceiling on every model in the project.
+COGNITIVE_INSTANCE2 = [
+    "20016-2.0",   # fluid intelligence
+    "6350-2.0",    # trail making B (executive)
+    "6373-2.0",    # matrix pattern reasoning
+    "4282-2.0",    # numeric memory
+    "20023-2.0",   # reaction time
+    "20018-2.0",   # prospective memory
+]
+
+
+def do_columns(columns: list[str], target: str) -> None:
+    """Coverage for one or more columns. Reads only eid plus that column."""
     eids = joint_eids(target)
     eid_set = set(eids.tolist())
-    for path in phesant_files():
-        if column not in pd.read_csv(path, nrows=0).columns:
+    headers = {p: list(pd.read_csv(p, nrows=0).columns) for p in phesant_files()}
+
+    print(f"target:  {target}   joint cohort: {eids.size:,d} participants\n")
+    print(f"{'column':<14}{'overall':>12}{'in joint':>11}{'cov%':>8}  file")
+    print("-" * 68)
+
+    complete: np.ndarray | None = None
+    for column in columns:
+        path = next((p for p, cols in headers.items() if column in cols), None)
+        if path is None:
+            print(f"{column:<14}{'— not found in any phesant file —':>31}")
             continue
-        # Only eid and the requested column are ever loaded.
         df = pd.read_csv(path, usecols=["eid", column]).dropna(subset=[column])
-        n_overall = int(df.shape[0])
-        n_joint = int(df["eid"].isin(eid_set).sum())
-        print(f"column:  {column}   (file: {path.name})")
-        print(f"target:  {target}   joint cohort: {eids.size:,d} participants")
-        print(f"non-missing overall:        {n_overall:,d}")
-        print(f"non-missing in joint cohort:{n_joint:>10,d}  "
-              f"({100.0 * n_joint / eids.size:.1f}% of the joint cohort)")
-        if n_joint < 0.5 * eids.size:
-            print("  ! under 50% coverage — a subtype comparison on this column "
-                  "would lose most of the cohort")
-        return
-    print(f"Column '{column}' not found in any phesantallphenos file.")
+        present = np.isin(eids, df["eid"].to_numpy(np.int64))
+        n_joint = int(present.sum())
+        pct = 100.0 * n_joint / eids.size
+        flag = "  !" if pct < 50 else ""
+        print(f"{column:<14}{df.shape[0]:>12,d}{n_joint:>11,d}{pct:>7.1f}%  "
+              f"{path.name}{flag}")
+        complete = present if complete is None else (complete & present)
+
+    if complete is not None and len(columns) > 1:
+        n = int(complete.sum())
+        print("-" * 68)
+        print(f"{'ALL of them':<14}{'':>12}{n:>11,d}{100.0 * n / eids.size:>7.1f}%")
+        print("\nThat last row is what a complete-case composite would be built on.\n"
+              "Items can also be scored pairwise or imputed if it is too lossy.")
 
 
 def main() -> None:
@@ -148,14 +173,19 @@ def main() -> None:
                    help="Header-scan for candidate outcome phenotypes.")
     p.add_argument("--pattern", default=None,
                    help="Custom regex for --list, instead of the built-in set.")
-    p.add_argument("--column", default=None,
-                   help="Report joint-cohort coverage for this exact column.")
+    p.add_argument("--column", nargs="+", default=None,
+                   help="Report joint-cohort coverage for these exact columns.")
+    p.add_argument("--cognitive", action="store_true",
+                   help="Coverage for the whole instance-2 cognitive battery, "
+                        "plus the complete-case count for a composite g-factor.")
     p.add_argument("--target", choices=("age", "fluid_iq"), default="age",
                    help="Which joint dataset defines the cohort for --column.")
     args = p.parse_args()
 
-    if args.column:
-        do_column(args.column, args.target)
+    if args.cognitive:
+        do_columns(COGNITIVE_INSTANCE2, args.target)
+    elif args.column:
+        do_columns(args.column, args.target)
     elif args.list or args.pattern:
         do_list(args.pattern)
     else:
