@@ -10,6 +10,73 @@ needs doing.
 
 ---
 
+## 2026-08-01 (evening) — The method beats its baselines on fluid IQ
+
+Eight independent seeds, converged (`--phase2-epoch 999`, best epoch 42–61), plus
+the classical baselines on the same 747 test subjects. **This is the first version
+of the Stage-2 result that is properly trained, properly seeded and properly
+baselined, and it is positive.**
+
+### Against linear baselines
+
+| model | test R² |
+|---|---|
+| mean predictor | −0.0007 |
+| ridge on 2,920 proteins (M1) | +0.0242 |
+| ridge on 2,145 FC edges (M2) | +0.0409 |
+| ridge on both, concatenated (M3 early fusion) | +0.0317 |
+| **Stage-2 fMRI branch (GNN)** | **+0.0655** — 1.60× ridge_fmri |
+| **Stage-2 fused, 8 seeds** | **+0.0732** — 1.79× the best ridge |
+| **Stage-2 fused, val-calibrated** | **+0.0781** — 1.91× |
+
+Two things worth stating separately. The GNN connectome encoder beats ridge on
+the raw edges by 60%, so the graph modelling is doing real work. And
+**`ridge_concat` (0.0317) is *worse* than `ridge_fmri` alone (0.0409)** — naive
+early fusion on raw features actively destroys signal, which is the strongest
+possible motivation for a learned fusion module.
+
+This is the opposite of the age result, where ridge matched the encoder exactly
+(0.8690 vs 0.868). The two targets have opposite verdicts on whether depth helps,
+and both belong in the report.
+
+### Branch contrasts, 8 seeds
+
+| contrast | mean | sd | signs | t (df=7) |
+|---|---|---|---|---|
+| fused − fMRI-only | **+0.0078** | 0.0066 | **7/8** | +3.31 |
+| joint-head − fused | **−0.0045** | 0.0034 | **1/8** | −3.69 |
+| joint-head − fMRI-only | +0.0033 | 0.0055 | 5/8 | +1.69 |
+
+**The Shapley-gated output beats its own naive-concatenation head on 7 of 8
+seeds.** That contrast is the cleanest in the table, and it is the reverse of what
+was claimed this morning from four truncated runs. Ordering is
+`fused > joint-head ≈ fMRI-only`, consistent with the M10 > M6 > M2 pattern §10
+predicts (M6 proper — a learned non-Shapley gate — still has to be built).
+
+Val-calibrated `fused − fMRI-only` is **+0.0118, 5/5 seeds** (calibration fields
+exist for seeds 4–8 only).
+
+### One anomaly, checked and cleared
+
+Seeds 1–3 average fused R² 0.0667; seeds 4–8 average 0.0771. The fMRI branch does
+not move (0.0654 vs 0.0655), so it is specific to the fused head. Being the three
+lowest of eight has probability 1/56 ≈ 0.018 — suspicious enough to check.
+
+**It is not a code difference.** Seeds 1–3 ran before commit `cd5cb47` and were
+re-run after it, and the two batches produced *byte-identical* metrics. That
+duplication proves the calibration commit did not touch training, so the spread is
+seed variation. The re-runs are also a clean determinism check: training is fully
+reproducible under a fixed seed.
+
+### A bug in our own summariser, twice
+
+First it counted deterministic re-runs as independent, inflating df. Fixed. The
+fix then kept the *first* copy of each duplicate — which for seeds 1–3 is the
+pre-`cd5cb47` record with no calibration fields — so the calibration block silently
+reported 5 runs instead of 8. Now keeps whichever copy carries more fields.
+
+---
+
 ## 2026-08-01 (late) — Spec audit: three terms in the design are mathematically inert
 
 First read of `fmri/Reference material/Model Design of TCG.pdf`. No assistant had

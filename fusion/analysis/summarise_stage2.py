@@ -81,8 +81,12 @@ def main() -> None:
     # seed writes a new run_id with byte-identical metrics. Counting those twice
     # doubles the apparent n and inflates every t-statistic — which is exactly
     # what happened on 2026-08-01, when a 3-seed contrast was reported as df=5.
-    seen: dict[tuple, str] = {}
-    unique, dupes = [], []
+    # When a seed is re-run after the trainer gained new fields, the copies are
+    # identical on the metrics but not equally informative. Keep whichever record
+    # carries more keys, or the calibration block silently reports on a subset.
+    seen: dict[tuple, int] = {}
+    unique: list[dict] = []
+    dupes: list[tuple[str, str]] = []
     for r in kept:
         key = (
             r.get("seed"), r.get("best_epoch"),
@@ -90,9 +94,14 @@ def main() -> None:
             round(float(r.get("test_r2_fmri_only", float("nan"))), 6),
         )
         if key in seen:
-            dupes.append((r.get("run_id", "?"), seen[key]))
+            pos = seen[key]
+            if len(r) > len(unique[pos]):
+                dupes.append((unique[pos].get("run_id", "?"), r.get("run_id", "?")))
+                unique[pos] = r
+            else:
+                dupes.append((r.get("run_id", "?"), unique[pos].get("run_id", "?")))
         else:
-            seen[key] = r.get("run_id", "?")
+            seen[key] = len(unique)
             unique.append(r)
 
     print(f"{len(runs)} run(s) found, {len(kept)} kept (best_epoch >= {args.min_epoch})")
