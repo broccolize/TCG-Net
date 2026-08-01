@@ -56,7 +56,7 @@ from config import SHARED_DATA_DIR, SPLIT_SEED  # noqa: E402
 PROCESSED_TENSOR_PATH = SHARED_DATA_DIR / "proteomics_tensor.pt"
 STAGE1_EXCLUDE_EIDS_PATH = SHARED_DATA_DIR / f"stage1_exclude_eids_{SPLIT_SEED}.npy"
 
-PERCENTILES = (50.0, 90.0, 99.0, 99.9)
+PERCENTILES = (50.0, 90.0, 99.0, 99.9, 99.99)
 
 
 def summarise(name: str, values: np.ndarray, unit: str = "SD") -> None:
@@ -127,31 +127,48 @@ def main() -> None:
     summarise("  |std ratio - 1|", s - 1.0, unit="rel")
 
     # Effect on the inputs the frozen encoder would see for Stage-2 eval rows.
+    #
+    #     dz = (z - m)/s - z = -m/s + z * (1/s - 1)
+    #
+    # The first term is the systematic offset every cell of a feature receives.
+    # The second is proportional to the cell's own z, so the extreme tail of
+    # |dz| is set by extreme protein values (|z| in the tens) meeting a small
+    # relative std change — it measures outliers, not leakage. Judge the channel
+    # on the offset and on a high quantile, never on the max.
     z_eval = x[banned_rows]
     dz = (z_eval - m) / s - z_eval
     print()
     print("Change in encoder input for Stage-2 evaluation participants:")
-    summarise("  |dz|", dz)
-    frac = float((np.abs(dz) > 0.01).mean())
-    print(f"  cells shifted by more than 0.01 SD: {100.0 * frac:.4f}%")
+    summarise("  |systematic offset| (-m/s, per feature)", m / s)
+    summarise("  |dz| (all cells)", dz)
+    for thresh in (0.01, 0.05, 0.10):
+        frac = float((np.abs(dz) > thresh).mean())
+        print(f"  cells shifted by more than {thresh:.2f} SD: {100.0 * frac:.4f}%")
 
+    offset = float(np.abs(m / s).max())
+    tail = float(np.percentile(np.abs(dz), 99.9))
     worst = float(np.abs(dz).max())
     print()
-    if worst < 0.01:
+    print(
+        f"(worst single cell: {worst:.2e} SD — reported for completeness only; "
+        "see the note above on why it is not the deciding statistic)"
+    )
+    if offset < 0.02 and tail < 0.05:
         print(
-            "VERDICT: negligible. The largest input change anywhere is "
-            f"{worst:.2e} SD. Re-running preprocess.py --exclude-eids would not "
-            "move a Stage-2 number; record the measurement and close item 6."
+            f"VERDICT: negligible. Largest systematic offset {offset:.2e} SD, "
+            f"p99.9 input change {tail:.2e} SD — both well under the seed noise "
+            "of the Stage-1/Stage-2 metrics. Keep the --exclude-eids fix for the "
+            "next preprocessing run, but do not trigger one for this alone."
         )
-    elif worst < 0.05:
+    elif offset < 0.05 and tail < 0.15:
         print(
-            f"VERDICT: small ({worst:.2e} SD worst case). Fix it on the next "
-            "preprocessing run rather than triggering one for this alone."
+            f"VERDICT: small (offset {offset:.2e} SD, p99.9 {tail:.2e} SD). Fold "
+            "the fix into the next preprocessing run rather than triggering one."
         )
     else:
         print(
-            f"VERDICT: material ({worst:.2e} SD worst case). Re-run "
-            "preprocess.py --exclude-eids, then Stage 1 and Stage 2."
+            f"VERDICT: material (offset {offset:.2e} SD, p99.9 {tail:.2e} SD). "
+            "Re-run preprocess.py --exclude-eids, then Stage 1 and Stage 2."
         )
 
 

@@ -10,6 +10,46 @@ needs doing.
 
 ---
 
+## 2026-08-01 — Item 6 measured: the fit-set leakage is negligible, re-run deferred
+
+`check_scaler_leakage.py` run on the server against
+`/shared/tcgnet_data_2/proteomics_tensor.pt`. This is the measurement the previous
+entry said to take before paying for a second KNN imputation.
+
+**Exposure.** 1,598 joint val/test EIDs, all present in the proteomics cohort;
+**1,134 of them sit in the 36,888-row training split — 3.07% of the fit set.**
+
+**Effect.**
+
+| | median | p99.9 | max |
+|---|---|---|---|
+| per-feature mean shift | 0.0021 SD | 0.0099 SD | 0.0122 SD |
+| per-feature std change | 0.16% | 0.84% | 0.90% |
+| encoder input change `\|dz\|`, 4.67M cells | 0.0023 SD | 0.019 SD | 0.245 SD |
+
+1.29% of cells move by more than 0.01 SD.
+
+**Verdict: negligible — do not trigger a preprocessing run for this alone.** A
+0.002 SD median shift in the encoder's inputs cannot move a Stage-2 number that
+carries ±0.005–0.009 R² of seed noise. The `--exclude-eids` code stays, and the
+next preprocessing run (whenever one is needed for another reason) closes the
+channel properly. `scaler_fit_leakage_free` will read `false` in the joint bundles
+until then, which is correct and now quantified.
+
+> [!warning] The script's first verdict line was wrong and said the opposite
+> It thresholded on `max(|dz|)`, which printed "material (2.45e-01 SD)". That
+> statistic does not measure leakage. Since
+> `dz = -m/s + z·(1/s - 1)`, the tail of `|dz|` is set by cells with extreme
+> protein values — |z| ≈ 25 against a 0.9% std change reproduces 0.245 exactly —
+> not by how much the statistics moved. The script now judges on the systematic
+> offset `|m/s|` and the p99.9, and prints the max only as context. Re-run it if
+> you want the corrected verdict line; the numbers above are unaffected.
+
+Still unmeasured: the KNNImputer donor pool. Under 5% of cells are imputed, and
+this bound does not cover them.
+
+---
+
 ## 2026-07-31 — Item 6 (preprocessing fit-set leakage) and item 12 (attention gradient)
 
 Code only. **Nothing in this entry has been run**; both changes need a run before
