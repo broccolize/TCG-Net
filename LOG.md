@@ -10,6 +10,92 @@ needs doing.
 
 ---
 
+## 2026-08-01 (late) — Spec audit: three terms in the design are mathematically inert
+
+First read of `fmri/Reference material/Model Design of TCG.pdf`. No assistant had
+seen it before; `PROMPT.md` open decision 2 was blocked on exactly this. Four
+findings, all algebraic and checkable by hand.
+
+### 1. §4.2 — `phi_int` is identically zero **in the spec**
+
+The spec defines
+
+```
+phi_f   = ½[(ŷ_f − ŷ_0) + (ŷ_fp − ŷ_p)]
+phi_p   = ½[(ŷ_p − ŷ_0) + (ŷ_fp − ŷ_f)]
+phi_int = ŷ_fp − ŷ_0 − phi_f − phi_p
+```
+
+Adding the first two, the cross terms cancel: `phi_f + phi_p = ŷ_fp − ŷ_0`
+exactly. This is the Shapley efficiency axiom for two players — a theorem, not a
+measurement — so `phi_int ≡ 0` for every participant by construction.
+
+**This was never a coding error. It is a defect in the design document**, and it
+disables the third softmax logit, which is why `w_int` sat frozen. The code
+already deviates (`shapley_fusion.py:58`) using the standard 2-way Shapley
+interaction index `I_fp = ŷ_fp − ŷ_f − ŷ_p + ŷ_0`, which is the correct object.
+That deviation is now confirmed as *necessary*, not optional.
+
+### 2. §6.3 half-notices, and the literal formula is a trap
+
+§6.3 says: *"If φ_int is defined exactly as above, this loss will be close to
+zero by construction."* The author saw that `L_shapley ≈ 0` but not that `phi_int`
+itself is the degenerate quantity.
+
+Worse, applying §6.3 literally **with a corrected `phi_int`** gives
+`||ŷ_fp − (ŷ_0 + phi_f + phi_p + I_fp)||² = ||I_fp||² = phi_int²` — a penalty
+driving the interaction to zero. The current code
+(`losses.py:28`) instead scores the *gated* output against the additive
+decomposition, `(y_hat − (y0 + phi_f + phi_p))²`, which is well-posed and carries
+real gradient. **Open decision 2 is resolved: the deviation from §6.3 is correct
+and must be kept.** Do not "restore spec compliance" here.
+
+### 3. §6.4 — `||w||₁` is a constant
+
+`w` is a softmax output, so its entries are non-negative and sum to 1, giving
+`||w||₁ ≡ 1` and zero gradient. Session 3 dropped it empirically; it is provably
+inert. The code's `l_sparse = ||α_f||₁` is the only live term of the three, which
+makes item 12 (the detached attention) the difference between `l_sparse` existing
+and not existing at all.
+
+### 4. §12 — the subtyping needs no Shapley values
+
+§12 defines the subtype score as `D_i = phi_f − phi_p`. Substituting §4.2:
+
+```
+phi_f − phi_p = ½[2ŷ_f − 2ŷ_p] = ŷ_f − ŷ_p
+```
+
+**The individualised "mechanistic subtyping" is exactly the difference between
+the two single-modality predictions.** The Shapley machinery cancels out. This
+does not make the analysis wrong, but the interpretability claim in §13 cannot
+rest on it — the same subtypes fall out of `ŷ_f − ŷ_p` with no fusion module at
+all. It also explains FIX_PLAN item 19: thresholding a z-scored variable at ±0.5
+yields ≈30/40/30 by construction, so near-thirds is expected, not a binning bug.
+
+### 5. §7.2 is the source of the truncation
+
+The spec prescribes "first 10 epochs freeze, after 10 unfreeze", which is where
+`--phase2-epoch 11` came from. Converged runs put the best epoch at **52–57**, so
+the spec's protocol stops phase 1 at roughly a fifth of its useful length. The
+deviation is justified and needs a methods sentence.
+
+### What this means for the claims
+
+§13 claims the method "simultaneously improve[s] cognitive prediction and
+provide[s] individualized mechanistic interpretation". As specified, three of its
+components are inert (`phi_int`, `L_shapley`, `||w||₁`) and the subtyping reduces
+to a two-model difference. §10 already anticipates the outcome: *"even if the full
+model shows only modest predictive improvement over standard gated fusion, its
+individualized interpretability can still provide substantial scientific value."*
+
+§10 also specifies the ablation ladder (M1–M10) with the expected ordering
+`M10 > M6 > M5/M4 > M2 > M1`. **M6 — a learned modality gate without Shapley — is
+the decisive baseline and has never been implemented.** M1/M2/M3 are covered by
+`fusion/analysis/baseline_joint.py`.
+
+---
+
 ## 2026-08-01 (late) — Calibration recovers the proteomics branch; ridge matches the age encoder
 
 ### Age: the Stage-1 encoder does not beat ridge

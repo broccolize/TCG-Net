@@ -69,13 +69,15 @@ never stated in the design docs. Three readings, with different verdicts:
 - (c) *individualized cognitive prediction by any means* → you have a working
   brain-based predictor at R² 0.068 and proteomics is a side story
 
-**2. `l_shapley` was redefined, not repaired.** The original was a tautology
-(identically 0). It now reads `(y_hat - (y0 + phi_f + phi_p))²` — Shapley
-efficiency applied to the fused prediction. **This has not been checked against
-§6.4 of the spec PDF, which the assistant never saw.** If you want zero behavioural
-change beyond making `phi_int` real, pass `lambda_shapley=0`. Note the term now
-carries real gradient where it carried none, so new runs are not comparable to any
-run before 2026-07-30.
+**2. `l_shapley` was redefined, not repaired. — RESOLVED 2026-08-01.** The spec
+PDF has now been read. §6.3's formula, applied literally with a corrected
+`phi_int`, reduces to `phi_int²` — a penalty that drives the interaction to zero.
+The current form `(y_hat - (y0 + phi_f + phi_p))²` is well-posed and must be
+**kept**; do not restore spec compliance. §6.3 itself concedes the term is "close
+to zero by construction". Note it now carries real gradient where it carried none,
+so runs are not comparable to anything before 2026-07-30. See LOG 2026-08-01
+"Spec audit" — and note that `phi_int ≡ 0` was a defect in **§4.2 of the design
+document**, not in the code.
 
 **3. instance-0 vs instance-2.** No configuration has both modalities at their best,
 because blood was drawn ~9 years before the scan:
