@@ -101,12 +101,98 @@
 #v(6pt)
 
 All results below are held-out test-set numbers. Joint-model figures are
-aggregated over *11 independent training runs* differing only in random seed,
-each trained to convergence under its own early-stopping criterion. Participants
-used to evaluate the joint model are excluded from every pretraining and
-baseline fit, so no evaluation subject influences any model it is scored on.
+aggregated over *11 independent training runs* differing only in random seed
+(five runs for the interpretability output in Section 1), each trained to
+convergence under its own early-stopping criterion. Participants used to
+evaluate the joint model are excluded from every pretraining and baseline fit,
+so no evaluation subject influences any model it is scored on.
 
-= 1. Fluid intelligence — current results
+= 1. Shapley contributions and model interpretability
+
+For each participant the fusion module estimates the contribution of the
+connectome ($phi_f$), of plasma proteomics ($phi_p$) and of their interaction
+($phi_"int"$), then converts them into the gate weights that drive latent
+fusion. These are the model's interpretability output. Distributions below pool
+five converged runs on the held-out fold.
+
+#tbl(
+  (1fr, 22mm, 22mm, 22mm, 22mm, 22mm),
+  (left, right, right, right, right, right),
+  ([Contribution], [mean], [sd], [p5], [median], [p95]),
+  [$phi_f$ — connectome],   [−0.0552], [0.2610], [−0.5312], [−0.0376], [+0.3371],
+  [$phi_p$ — proteomics],   [−0.0282], [0.0882], [−0.1669], [−0.0302], [+0.1141],
+  [$phi_"int"$ — interaction], [−0.0812], [0.1652], [−0.3388], [−0.0858], [+0.1903],
+)
+
+== The interaction term is a live measured quantity
+
+For two players the Shapley efficiency axiom gives $phi_f + phi_p = hat(y)_(f p) - hat(y)_0$
+identically, so defining the interaction as the residual of that identity returns
+exactly zero for every participant — measured here at $6.0 times 10^(-8)$, zero to
+numerical precision. The model instead uses the two-way interaction index
+$I = hat(y)_(f p) - hat(y)_f - hat(y)_p + hat(y)_0$, which varies substantially
+between participants (sd 0.165, range −0.94 to +0.54). *Its spread exceeds that of
+the proteomic main effect* (sd 0.088): cross-modal interaction differs more
+between individuals than the proteomic contribution itself does.
+
+== Gate weights are not measures of predictive contribution
+
+#tbl(
+  (1fr, 24mm, 22mm, 30mm, 26mm),
+  (left, right, right, right, right),
+  ([Branch], [mean $w$], [sd $w$], [range], [branch $r$]),
+  [Connectome],  [0.335], [0.047], [0.169 – 0.518], [+0.259],
+  [Proteomics],  [0.342], [0.029], [0.256 – 0.443], [+0.100],
+  [Interaction], [0.324], [0.024], [0.205 – 0.415], [—],
+)
+
+The proteomics branch carries the *highest* mean gate weight (0.342) while
+correlating with the target at less than half the connectome branch's rate
+(0.100 against 0.259). The weights are a softmax over the Shapley values, so a
+branch can hold a high weight while predicting poorly.
+
+#keybox[
+  A high $w_p$ must not be reported as evidence of proteomic importance. It is a
+  property of the gate, not of the branch's predictive skill.
+]
+
+All three weights sit near one third because the gate operated at temperature
+1.0 throughout these runs; the sharpened setting was not active.
+
+== The subtyping score reduces to a single branch
+
+Substituting the contribution definitions, the subtype score $D = phi_f - phi_p$
+simplifies exactly to $hat(y)_f - hat(y)_p$ — confirmed numerically, with a
+maximum discrepancy of $6.0 times 10^(-8)$. Because the proteomics branch output
+has a collapsed amplitude, $D$ correlates with the connectome prediction at
+*0.998*, and its correlation with the target (0.254) is indistinguishable from
+the connectome branch's own (0.259).
+
+#tbl(
+  (1fr, 20mm, 20mm, 30mm),
+  (left, right, right, right),
+  ([Subtype], [$n$], [share], [mean target (z)]),
+  [Brain-dominant], [247], [33.1%], [+0.207],
+  [Balanced],       [281], [37.6%], [+0.038],
+  [Blood-dominant], [219], [29.3%], [−0.372],
+)
+
+#keybox[
+  The three subtypes partition participants by their connectome prediction rather
+  than by a brain-versus-blood mechanism, so the differences in cognitive score
+  above are a selection effect. Rescaling the two branch outputs to comparable
+  amplitude before differencing would make $D$ a genuine two-modality contrast,
+  and is the natural next step for this analysis.
+]
+
+#note[
+  The group sizes are also uninformative on their own: thresholding a
+  standardised score at ±0.5 yields approximately 31 / 38 / 31 per cent for any
+  normally distributed variable, so a near-equal three-way split is the expected
+  outcome rather than evidence of structure.
+]
+
+= 2. Fluid intelligence — prediction results
 
 The joint model is trained on 3,471 participants and evaluated on 747 held-out
 participants. Alongside the fused prediction it exposes three internal
@@ -171,7 +257,7 @@ sampled roughly nine years before the scan — *and not of the model.*
 
 #pagebreak()
 
-= 2. Ablation and baseline testing — fluid intelligence
+= 3. Ablation and baseline testing — fluid intelligence
 
 Every model below is evaluated on the same 747 held-out participants. Two
 families of linear baseline were run. The first is fitted on the joint training
@@ -230,7 +316,7 @@ standard deviation of 0.006.
   the game-theoretic weighting specifically.
 ]
 
-= 3. Ablation and baseline testing — age
+= 4. Ablation and baseline testing — age
 
 Age was assessed as a second target because both modalities carry substantial
 signal for it, which fluid intelligence does not permit.
@@ -257,7 +343,7 @@ architecture.
 == Joint cohort — the multimodal baselines
 
 Evaluated on 799 held-out participants from the joint cohort, using the same two
-baseline families as in Section 2.
+baseline families as in Section 3.
 
 #tbl(
   (1fr, 24mm, 24mm, 22mm),
@@ -305,6 +391,8 @@ results on both targets. Three findings stand out.
   #set enum(numbering: n => text(fill: accent, weight: "bold")[#n.])
   + The cooperative fusion mechanism outperforms both single-modality prediction
     and naive concatenation within the architecture, consistently across seeds.
+    The interaction term is a live, individually varying quantity whose spread
+    exceeds that of the proteomic main effect.
 
   + Multimodal integration is genuinely informative for both targets. The
     proteomic contribution to cognition is small for a quantifiable reason — a
@@ -314,6 +402,10 @@ results on both targets. Three findings stand out.
   + Neither deep encoder currently outperforms a regularised linear model given
     the same training data, which locates the remaining work in the learned
     representations rather than in the fusion mechanism.
+
+  + Two interpretability quantities need restating before publication: the gate
+    weights do not measure predictive contribution, and the subtyping score
+    currently reduces to the connectome prediction alone.
 ]
 
 *Immediate priorities.* Complete the remaining ablations, particularly the
