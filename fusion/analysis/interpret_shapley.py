@@ -129,6 +129,25 @@ def main() -> None:
           if gap < 1e-4 else
           "  -> the two differ; the subtyping is not a plain branch difference.")
 
+    # Is the subtype-target association mechanical? D is dominated by y_hat_f,
+    # which is itself the stronger predictor of y, so selecting a high D partly
+    # selects a high y_hat_f and therefore a high y. If corr(D, y) is comparable
+    # to corr(y_hat_f, y), the group differences below are that selection effect
+    # and not a mechanistic distinction between participants.
+    d_all = np.concatenate([r["phi_f"] - r["phi_p"] for r in runs])
+    yf_all = np.concatenate([r["y_hat_f"] for r in runs])
+    yp_all = np.concatenate([r["y_hat_p"] for r in runs])
+    print("\n  Is the subtype-target link mechanical?")
+    print(f"    corr(D, target)      = {corr(d_all, y):+.4f}")
+    print(f"    corr(y_hat_f, target) = {corr(yf_all, y):+.4f}   "
+          f"corr(D, y_hat_f) = {corr(d_all, yf_all):+.4f}")
+    print(f"    corr(y_hat_p, target) = {corr(yp_all, y):+.4f}   "
+          f"corr(D, y_hat_p) = {corr(d_all, yp_all):+.4f}")
+    if abs(corr(d_all, y)) > 0.5 * abs(corr(yf_all, y)):
+        print("    -> D tracks the target largely because it tracks the stronger "
+              "branch;\n       report the group differences as a selection effect, "
+              "not a mechanism.")
+
     print(f"\n  {'subtype':<18}{'n':>8}{'share':>9}{'mean target':>13}")
     for r in runs[:1]:  # per-run so the counts are a real cohort, not a pool
         d = r["phi_f"] - r["phi_p"]
