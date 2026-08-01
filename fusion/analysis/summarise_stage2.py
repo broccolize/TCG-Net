@@ -121,6 +121,35 @@ def main() -> None:
         print(line)
         print(f"    {'  '.join(f'{x:+.4f}' for x in d)}")
 
+    # Val-fitted affine recalibration, if the runs carry it. This is the
+    # reportable version of the r^2 ceiling printed below.
+    cal = [r for r in have if "test_r2_cal" in r]
+    if cal:
+        print(f"\nval-calibrated R2 across {len(cal)} run(s)")
+        print(f"  {'branch':<12}{'raw':>10}{'calibrated':>12}{'delta':>10}{'scale':>9}")
+        for raw_k, cal_k, sc_k, label in (
+            ("test_r2", "test_r2_cal", "cal_scale", "fused"),
+            ("test_r2_fmri_only", "test_r2_cal_fmri_only", "cal_scale_fmri_only", "fMRI-only"),
+            ("test_r2_prot_only", "test_r2_cal_prot_only", "cal_scale_prot_only", "prot-only"),
+            ("test_r2_joint_head", "test_r2_cal_joint_head", "cal_scale_joint_head", "joint-head"),
+        ):
+            raw = np.array([r[raw_k] for r in cal], dtype=float)
+            new = np.array([r[cal_k] for r in cal], dtype=float)
+            sc = np.array([r[sc_k] for r in cal], dtype=float)
+            print(
+                f"  {label:<12}{raw.mean():>+10.4f}{new.mean():>+12.4f}"
+                f"{(new - raw).mean():>+10.4f}{sc.mean():>9.3f}"
+            )
+        d = np.array(
+            [r["test_r2_cal"] - r["test_r2_cal_fmri_only"] for r in cal], dtype=float
+        )
+        print(
+            f"\n  calibrated fused - fMRI-only: {d.mean():+.4f} "
+            f"+/- {d.std(ddof=1) if d.size > 1 else float('nan'):.4f}   "
+            f"signs {int((d > 0).sum())}/{d.size}"
+        )
+        print(f"    {'  '.join(f'{x:+.4f}' for x in d)}")
+
     # Shrinkage diagnostic: r^2 is what an optimally rescaled predictor would
     # score. A large r^2 - R^2 gap means the ranking is there but the amplitude
     # is wrong. NB: r^2 is fitted on the test set, so it is an optimistic

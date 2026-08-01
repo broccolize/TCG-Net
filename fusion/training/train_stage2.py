@@ -86,7 +86,33 @@ def parse_args():
     return p.parse_args()
 
 
-def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device):
+def fit_affine(p, t):
+    """
+    Least-squares scale and offset mapping a prediction onto its target.
+
+    Returns (a, b) minimising ||t - (a*p + b)||^2. Fit this on the VALIDATION
+    fold and apply it to test — fitting on test would just report r^2, which is
+    a ceiling and not a number anyone can publish.
+    """
+    p = p.double(); t = t.double()
+    pm, tm = p.mean(), t.mean()
+    var = ((p - pm) ** 2).sum()
+    if var <= 0:
+        return 0.0, tm.item()          # collapsed predictor: best affine map is the mean
+    a = (((p - pm) * (t - tm)).sum() / var).item()
+    return a, (tm - a * pm).item()
+
+
+def r2_of(p, t):
+    """R^2 with SST against the evaluation set's own mean, as evaluate() uses."""
+    ss_tot = ((t - t.mean()) ** 2).sum()
+    if ss_tot <= 0:
+        return float('nan')
+    return (1.0 - ((t - p) ** 2).sum() / ss_tot).item()
+
+
+def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device,
+             return_preds=False):
     """
     Pooled evaluation over a loader.
 
@@ -146,6 +172,11 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device):
     # means the model has shrunk toward the mean rather than learned to rank.
     out['pred_std'] = p_main.std().item()
     out['target_std'] = t.std().item()
+    if return_preds:
+        # Raw predictions, for fitting/applying the affine calibration across
+        # folds. Underscore-prefixed so they never reach the JSONL log.
+        out['_preds'] = {k: torch.cat(v).flatten() for k, v in cols.items()}
+        out['_targets'] = t
     return out
 
 
@@ -396,7 +427,32 @@ def main():
     fusion.load_state_dict(ckpt['fusion'])
     head.load_state_dict(ckpt['head'])
 
-    test = evaluate(test_loader, fmri_enc, prot_enc, fusion, head, criterion, device)
+    test = evaluate(test_loader, fmri_enc, prot_enc, fusion, head, criterion, device,
+                    return_preds=True)
+
+    # ------------------------------------------------------------------
+    # Affine recalibration, fit on val and applied to test.
+    #
+    # Measured over 3 converged seeds (2026-08-01): the fused output ranks
+    # better than the fMRI branch on every seed (r +0.019 mean) while being
+    # more over-shrunk on every seed, so the two cancel and R^2 shows nothing.
+    # r^2 - R^2 quantifies what the miscalibration costs, but r^2 is fitted on
+    # the test set and is only a ceiling. This recovers the honest version:
+    # the scale comes from val, the score from test.
+    #
+    # Caveat to carry into the write-up: val also drove early stopping and
+    # checkpoint selection, so these numbers are not perfectly clean either.
+    # They are, however, the standard construction and vastly better than r^2.
+    # ------------------------------------------------------------------
+    val_c = evaluate(val_loader, fmri_enc, prot_enc, fusion, head, criterion, device,
+                     return_preds=True)
+    cal, cal_scale = {}, {}
+    for key, label in (('y_hat', ''), ('y_hat_f', '_fmri_only'),
+                       ('y_hat_p', '_prot_only'), ('y_hat_fp', '_joint_head')):
+        a, b = fit_affine(val_c['_preds'][key], val_c['_targets'])
+        cal[label] = r2_of(a * test['_preds'][key].double() + b,
+                           test['_targets'].double())
+        cal_scale[label] = a
     print(f"[test] n={len(test_idx)} epoch={ckpt['epoch']}  "
           f"mae {test['mae']:.4f} ({test['mae'] * dataset.y_std:.3f} IQ) | "
           f"r2 {test['r2']:.4f} | r {test['pearson_r']:.4f} | loss {test['loss']:.4f}")
@@ -410,6 +466,14 @@ def main():
           f"joint-head {test['pearson_y_hat_fp']:.4f}")
     print(f"[test] pred_std {test['pred_std']:.4f} vs target_std {test['target_std']:.4f} "
           f"(far below 1.0 = shrunk toward the mean)")
+    print(f"[test] val-calibrated r2 — fused {cal['']:.4f} | "
+          f"fMRI-only {cal['_fmri_only']:.4f} | "
+          f"prot-only {cal['_prot_only']:.4f} | "
+          f"joint-head {cal['_joint_head']:.4f}")
+    print(f"[test] calibration scale (>1 = raw output was over-shrunk) — "
+          f"fused {cal_scale['']:.3f} | fMRI-only {cal_scale['_fmri_only']:.3f} | "
+          f"prot-only {cal_scale['_prot_only']:.3f} | "
+          f"joint-head {cal_scale['_joint_head']:.3f}")
 
     summary = {
         'run_id':        run_id,
@@ -439,6 +503,16 @@ def main():
         'test_pearson_joint_head': round(test['pearson_y_hat_fp'], 6),
         'test_pred_std':      round(test['pred_std'], 6),
         'test_target_std':    round(test['target_std'], 6),
+        # Affine rescale fit on val, applied to test. The fused branch ranks
+        # better than fMRI-only but is more over-shrunk; raw R^2 hides that.
+        'test_r2_cal':             round(cal[''], 6),
+        'test_r2_cal_fmri_only':   round(cal['_fmri_only'], 6),
+        'test_r2_cal_prot_only':   round(cal['_prot_only'], 6),
+        'test_r2_cal_joint_head':  round(cal['_joint_head'], 6),
+        'cal_scale':             round(cal_scale[''], 6),
+        'cal_scale_fmri_only':   round(cal_scale['_fmri_only'], 6),
+        'cal_scale_prot_only':   round(cal_scale['_prot_only'], 6),
+        'cal_scale_joint_head':  round(cal_scale['_joint_head'], 6),
         'prot_ckpt':     str(PROT_CKPT),
         'fmri_ckpt':     str(FMRI_CKPT),
         'joint_dataset': str(JOINT_PT),
