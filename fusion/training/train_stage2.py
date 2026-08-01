@@ -133,6 +133,10 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device,
     # branches is the only way to tell whether the fusion module adds anything
     # over its own inputs, or destroys signal that was already there.
     cols = {k: [] for k in ('y_hat', 'y_hat_f', 'y_hat_p', 'y_hat_fp')}
+    # Shapley contributions and the gate weights they drive. These are the
+    # model's interpretability output (spec section 4.2/4.3) and the basis of the
+    # section-12 subtyping, so they have to leave the forward pass to be analysed.
+    shap = {k: [] for k in ('phi_f', 'phi_p', 'phi_int', 'w')}
     targets = []
     loss_sum, n_batches = 0.0, 0
 
@@ -151,6 +155,8 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device,
             cols['y_hat_f'].append(fusion_out.y_hat_f.detach().cpu())
             cols['y_hat_p'].append(fusion_out.y_hat_p.detach().cpu())
             cols['y_hat_fp'].append(fusion_out.y_hat_fp.detach().cpu())
+            for k in ('phi_f', 'phi_p', 'phi_int', 'w'):
+                shap[k].append(getattr(fusion_out, k).detach().cpu())
             targets.append(batch.y.detach().cpu())
 
     t = torch.cat(targets).flatten()
@@ -183,6 +189,7 @@ def evaluate(loader, fmri_enc, prot_enc, fusion, head, criterion, device,
         # folds. Underscore-prefixed so they never reach the JSONL log.
         out['_preds'] = {k: torch.cat(v).flatten() for k, v in cols.items()}
         out['_targets'] = t
+        out['_shapley'] = {k: torch.cat(v) for k, v in shap.items()}
     return out
 
 
@@ -509,6 +516,36 @@ def main():
           f"fused {cal_scale['']:.3f} | fMRI-only {cal_scale['_fmri_only']:.3f} | "
           f"prot-only {cal_scale['_prot_only']:.3f} | "
           f"joint-head {cal_scale['_joint_head']:.3f}")
+
+    # ------------------------------------------------------------------
+    # Per-participant Shapley output. This is the model's interpretability
+    # product (spec 4.2/4.3, 11, 12) and none of it survived the forward pass
+    # before now, so every figure built on phi_* predates the interaction-index
+    # correction. Written per run so the quantities can be aggregated across
+    # seeds rather than read off a single model.
+    # ------------------------------------------------------------------
+    sh = test['_shapley']
+    shap_path = SAVE_DIR / f'shapley_{TARGET}_{run_id}.npz'
+    np.savez(
+        shap_path,
+        eid=ds['eid'].numpy()[test_idx].astype(np.int64),
+        y=test['_targets'].numpy(),
+        y_hat=test['_preds']['y_hat'].numpy(),
+        y_hat_f=test['_preds']['y_hat_f'].numpy(),
+        y_hat_p=test['_preds']['y_hat_p'].numpy(),
+        y_hat_fp=test['_preds']['y_hat_fp'].numpy(),
+        phi_f=sh['phi_f'].numpy(), phi_p=sh['phi_p'].numpy(),
+        phi_int=sh['phi_int'].numpy(), w=sh['w'].numpy(),
+        y_baseline=float(fusion.y_baseline.item()),
+        seed=args.seed, best_epoch=best_epoch,
+    )
+    w_mean = sh['w'].mean(dim=0)
+    print(f"[shapley] phi_f {sh['phi_f'].mean():+.4f}±{sh['phi_f'].std():.4f} | "
+          f"phi_p {sh['phi_p'].mean():+.4f}±{sh['phi_p'].std():.4f} | "
+          f"phi_int {sh['phi_int'].mean():+.4f}±{sh['phi_int'].std():.4f}")
+    print(f"[shapley] gate weights — w_f {w_mean[0]:.3f} | w_p {w_mean[1]:.3f} | "
+          f"w_int {w_mean[2]:.3f}   (spread {sh['w'].max() - sh['w'].min():.3f})")
+    print(f"[shapley] written: {shap_path}")
 
     summary = {
         'run_id':        run_id,
