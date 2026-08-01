@@ -10,6 +10,76 @@ needs doing.
 
 ---
 
+## 2026-08-01 — Stage-2 multi-seed: the fusion null was a single-seed artefact
+
+Four runs carrying the branch decomposition (seeds 42, 1, 2, 3; wd=1e-3; same
+joint split, same encoders, stale-but-consistent graph features). **Two of the
+three conclusions drawn from the single seed-42 run are wrong.**
+
+| branch | mean R² | sd | min | max |
+|---|---|---|---|---|
+| fused | +0.0677 | 0.0009 | +0.0665 | +0.0683 |
+| fMRI-only | +0.0623 | 0.0038 | +0.0578 | +0.0669 |
+| prot-only | −0.0014 | 0.0019 | −0.0030 | +0.0011 |
+| joint-head | **+0.0710** | 0.0022 | +0.0689 | +0.0741 |
+
+Paired per-seed contrasts (the right statistic here — same test subjects, only
+the init and batch order differ):
+
+| contrast | mean | sd | signs | t (df=3) |
+|---|---|---|---|---|
+| fused − fMRI-only | **+0.0054** | 0.0030 | 4/4 + | +3.57 |
+| joint-head − fused | **+0.0034** | 0.0026 | 4/4 + | +2.60 |
+| joint-head − fMRI-only | **+0.0088** | 0.0052 | 4/4 + | +3.37 |
+
+### What changed
+
+1. **Multimodal fusion does beat fMRI alone.** +0.0054 R², same sign on every
+   seed. The previously reported +0.0014 was seed 42 — the *smallest* of the four
+   — read as if it were the estimate. "The joint model is the fMRI model" was
+   wrong.
+2. **The Shapley gate is the part that does not work.** `joint-head` — the plain
+   MLP on concatenated embeddings, sitting inside the model as an incidental
+   naive-fusion baseline — beats the gated output on 4/4 seeds. It also beats
+   fMRI-only by +0.0088, against the gate's +0.0054. **The cooperative gating
+   discards roughly 40% of the available multimodal gain.** The earlier reading
+   ("joint-head matches the gated output") was again the single most favourable
+   seed.
+3. What survives unchanged: proteomics alone scores R² ≈ 0.
+
+### The proteomics branch is amplitude-collapsed, not signal-free
+
+`test_pearson_prot_only` across seeds 1/2/3: **+0.1705, −0.1695, −0.1700.**
+Magnitudes agree to within 0.001; the sign flips. That is not a weak signal
+behaving randomly — a genuinely noisy branch would scatter in magnitude too.
+
+Two things follow. First, |r| ≈ 0.170 is essentially the **entire** proteomics
+signal available in this cohort (LOG 2026-07-30 measured r = 0.171 for
+proteomics → instance-2 fluid IQ on the joint cohort). The branch is extracting
+all of it. Second, the amplitude is gone: from R² = −0.003 with |r| = 0.17, the
+sub-head's output std is ≈ **0.9% of the target's**. It is predicting a constant
+with a whisper of correctly-ordered variation on top, and at that amplitude the
+MSE gradient cannot identify the sign — hence the flip.
+
+So `prot-only R² ≈ 0` is **not** evidence that proteomics contributes nothing. It
+is evidence that the proteomics sub-head is not being read out. This is item 10
+manifesting in the branch rather than the main head. Supporting detail: seed 1 is
+the one seed with the sign correct, and it has both the only positive prot-only
+R² (+0.0011) and the best joint-head of the four (0.0741).
+
+### Caveat on the error bars
+
+All four runs share one joint split, so these sds are **initialisation noise, not
+sampling error**. The test set is n=747; the sampling uncertainty on any single
+R² is far wider (order ±0.03). Quote the paired contrasts, which are within-test-
+set and legitimate; do not quote 0.0677 ± 0.0009 as if the population value were
+pinned to three decimals.
+
+n=4 with df=3 makes the t values indicative, not conclusive — p ≈ 0.03–0.08. The
+4/4 sign consistency on all three contrasts is what carries the argument.
+
+---
+
 ## 2026-08-01 — Item 6 measured: the fit-set leakage is negligible, re-run deferred
 
 `check_scaler_leakage.py` run on the server against
