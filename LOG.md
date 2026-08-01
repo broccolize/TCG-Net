@@ -10,6 +10,77 @@ needs doing.
 
 ---
 
+## 2026-08-01 (evening, later) — Fair baselines beat the architecture. Headline retracted.
+
+`baseline_pretrained.py` gives ridge the same pretraining cohort the encoders
+get: fit on the full single-modality data with all joint val/test EIDs excluded,
+apply to the joint participants, refit only an affine map on joint train
+(mirroring Stage 2, which keeps the encoder and refits its heads), score once on
+joint test.
+
+### Fluid IQ — the deep pipeline loses
+
+| model | test R² | r |
+|---|---|---|
+| ridge_prot pretrained | 0.0363 | 0.195 |
+| ridge_fmri pretrained | **0.0818** | 0.290 |
+| **late fusion of the two (M4)** | **0.1035** | **0.325** |
+| Stage-2 fused, 8 seeds | 0.0732 | 0.279 |
+| Stage-2 fused, calibrated | 0.0781 | — |
+| Stage-2 fMRI branch | 0.0655 | 0.260 |
+
+**Every deep component loses to its linear counterpart once the baseline gets the
+same data.** Ridge on FC edges (0.0818) beats the GNN branch (0.0655) and beats
+the entire fused model. Linear late fusion (0.1035) beats the best Stage-2 number
+by **+0.025 R², a 33% relative margin** — four times the seed sd of 0.006.
+
+**The "1.79× ridge" claim from earlier today is retracted.** It compared against a
+ridge fit on 3,471 joint-train subjects while the encoders had been pretrained on
+tens of thousands. The margin was the pretraining cohort, not the architecture.
+
+Note also that late fusion shows a **larger** multimodal gain than the deep model
+ever did: 0.1035 vs 0.0818 for fMRI alone is **+0.0217**, against the gated
+model's +0.0078. Proteomics *does* add to fMRI for fluid IQ. The Shapley fusion
+simply extracts less of it than a two-weight linear combination.
+
+### Age — the bar for a Stage-2 age run
+
+| model | pretrained | joint-only | pretraining worth |
+|---|---|---|---|
+| ridge_prot | 0.8106 | 0.7742 | +0.036 |
+| ridge_fmri | 0.3526 | 0.2469 | **+0.106** |
+| late fusion (M4) | **0.8228** | 0.7828 | +0.040 |
+
+Stage-2 age must clear **R² 0.8228 / r 0.9075**. Multimodal gain over proteomics
+alone is +0.0122 — real, small, and positive, unlike fluid IQ's joint-only case.
+
+### Diagnosis: Stage 2 throws away the pretrained heads
+
+`proteomics/models/aux_head.py` states it plainly — Stage 1 saves
+`aux_head_state_dict`, and Stage 2 loads "**only** `encoder_state_dict`; the
+auxiliary head is discarded". So the head fitted on 11,528 subjects is replaced by
+a random-init `H_p` refitted on 3,471. Ridge keeps its full-cohort weights and
+adapts two parameters; the deep model re-learns its readout on a tenth of the data.
+That is the most likely reason the gap runs the way it does.
+
+`ProteomicsAuxHead` is `nn.Linear(128, 1)` — the same shape as the fusion module's
+`H_p` — so the weights transfer directly. Added `--init-heads` to
+`train_stage2.py` (off by default; earlier runs stay reproducible). `H_f` cannot
+be warm-started: the fMRI checkpoint is a bare encoder state dict with no aux
+head saved, which is now a second reason to want item 15.
+
+### Also measured
+
+Ridge on the full proteomics cohort reaches **val R² 0.1149** for fluid IQ against
+the Stage-1 encoder's 0.107, and 0.8690 vs 0.868 for age. **The proteomics SE-MLP
+does not beat ridge on either target.** Whatever this architecture contributes, it
+is not in the proteomics branch.
+
+Phenotype coverage for §12 is ample: all six outcomes above 93%, 4,324
+participants (81.2%) complete on all of them.
+
+---
+
 ## 2026-08-01 (evening) — The method beats its baselines on fluid IQ
 
 Eight independent seeds, converged (`--phase2-epoch 999`, best epoch 42–61), plus

@@ -77,6 +77,12 @@ def parse_args():
                    help='LR for the fusion module and prediction head.')
     p.add_argument('--lr-encoder', type=float, default=1e-5, dest='lr_encoder',
                    help='LR for the encoders once unfrozen in Phase 2.')
+    p.add_argument('--init-heads', action='store_true', dest='init_heads',
+                   help='Warm-start the fusion H_p from the Stage-1 proteomics aux '
+                        'head instead of random init. Stage 1 fits that head on the '
+                        'full cohort; refitting it on 3.5k joint-train subjects '
+                        'discards the pretraining. Off by default so earlier runs '
+                        'stay reproducible.')
     p.add_argument('--epochs', type=int, default=200)
     p.add_argument('--patience', type=int, default=20)
     p.add_argument('--phase2-epoch', type=int, default=11, dest='phase2_epoch',
@@ -258,6 +264,35 @@ def main():
     # Phase 2: T→0.1 (sharp gate — aux heads now calibrated, Shapley values meaningful)
     fusion = CooperativeShapleyFusion(dropout=0.4, temperature=1.0).to(device)
     head   = PredictionHead(dropout=0.4).to(device)
+
+    # ------------------------------------------------------------------
+    # Optional: warm-start H_p from the Stage-1 auxiliary head.
+    #
+    # Stage 1 fits its aux head on the full single-modality cohort (11,528
+    # subjects for fluid IQ); Stage 2 throws it away and refits H_p from random
+    # init on 3,471 joint-train subjects. Measured 2026-08-01: ridge pretrained
+    # on the same large cohort and then merely affine-adapted on joint train
+    # scores 0.0363 on the joint test, against 0.0294 for the calibrated
+    # Stage-2 proteomics branch — i.e. discarding the pretrained head costs more
+    # than the encoder gains. ProteomicsAuxHead is nn.Linear(128, 1), the same
+    # shape as H_p, so the weights transfer directly.
+    #
+    # Off by default so every run before this date stays reproducible.
+    # ------------------------------------------------------------------
+    if args.init_heads:
+        aux_sd = prot_ckpt.get('aux_head_state_dict')
+        if aux_sd is None:
+            print('[init-heads] WARNING: no aux_head_state_dict in the proteomics '
+                  'checkpoint — H_p left at random init.')
+        else:
+            fusion.H_p.load_state_dict(
+                {'weight': aux_sd['fc.weight'], 'bias': aux_sd['fc.bias']}
+            )
+            print('[init-heads] H_p warm-started from the Stage-1 proteomics aux head.')
+        # The fMRI checkpoint is a bare encoder state dict, so there is no
+        # pretrained H_f to transfer. Saving it is on the fMRI side (item 15).
+        print('[init-heads] H_f left at random init — the fMRI checkpoint stores '
+              'no aux head.')
 
     # ------------------------------------------------------------------
     # Step 4 — Set baseline
