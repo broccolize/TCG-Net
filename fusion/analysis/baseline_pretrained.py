@@ -197,7 +197,11 @@ def main() -> None:
         rng.shuffle(usable)
         n_val = int(round(usable.size * VAL_FRAC_FMRI))
         g_va, g_tr = usable[:n_val], usable[n_val:]
-        g_y = np.array([lut[int(e)] for e in fc_ids], dtype=np.float64)
+        # Only rows in `usable` are ever indexed, and those are guaranteed to be
+        # in the lookup — but the array spans the whole cohort, so participants
+        # without the target need a placeholder rather than a KeyError. Age is
+        # complete on the imaging cohort (40,517/40,517); fluid IQ is not.
+        g_y = np.array([lut.get(int(e), np.nan) for e in fc_ids], dtype=np.float64)
 
         print(f"  connectome cohort: {fc_ids.size:,d} subjects, {int(has.sum()):,d} "
               f"with '{column}', fitting on {g_tr.size:,d} train / {g_va.size:,d} val "
