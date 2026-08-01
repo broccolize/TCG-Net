@@ -27,6 +27,33 @@ automatically. Provide the exact command, fully filled in, and state which
 directory and conda environment to run it from (normally `~/TCG-Net` and
 `tcg_net` on the server).
 
+## Assistant reply format
+
+Every reply that follows a run, a pasted result, or a question uses this order,
+with nothing inserted between the two parts:
+
+**1. Findings first.** What the numbers say, what changed, what is now known,
+and what a previous conclusion has to give up. Lead with the result, not the
+process. If a claim was overturned, say so plainly and say why.
+
+**2. Then a numbered command procedure.** Every command the user should run
+next, in the order to run them, each in its own fenced `bash` block, one command
+per block, fully filled in with no placeholders. For each step state:
+
+- what it answers or produces,
+- roughly how long it takes,
+- whether it must be run sequentially (Stage 2 writes a fixed `best_model.pt`,
+  so two Stage-2 jobs must never run at once).
+
+Commands run on the server from `~/TCG-Net` in the `tcg_net` environment, via
+`conda run --no-capture-output -n tcg_net python -u ...`. Heredocs and
+`python - <<'PY'` do not survive `conda run`; put anything non-trivial in a
+committed script and call that instead. Always include the `git pull` step when
+new commits have been pushed during the session.
+
+Do not append optional tangents, alternatives, or open questions after the
+command list — those belong in the findings section above it.
+
 ## Working notes
 
 - [`LOG.md`](LOG.md) — dated log of every change made. Append a new entry at the
