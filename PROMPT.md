@@ -141,6 +141,10 @@ merge. Inert in Stage-2 phase 1 (encoder frozen); only acts in phase 2.
 - **Graph-feature caches validate only subject count.** Any change to features or
   splits requires deleting `graph_feats_joint*.npz` by hand. A colleague's
   within-module z-score fix landed upstream and will **not** reach fusion otherwise.
+  **But do not delete them on their own** — the `fmri_stage1_*.pt` encoders were
+  trained on the old features, so deleting the cache without re-pretraining swaps
+  a stale-feature run for a silent train/inference mismatch. Keep the caches until
+  the fMRI side retrains; see the boxed warning in `FIX_PLAN.md`.
 - **The two `TARGET_CONFIG`s deliberately disagree** — `proteomics/data/build_dataset.py`
   is instance-0 (blood drawn at baseline), `fusion/data/build_joint_dataset.py` is
   instance-2 (scans at imaging visit). "Aligning" them silently breaks one stage.

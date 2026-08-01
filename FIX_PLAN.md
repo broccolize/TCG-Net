@@ -72,11 +72,25 @@ Two consequences that will bite silently:
 1. **The graph-feature caches on the server are now stale in a new way.** The
    cache guard only checks subject count (`cached.shape[0] == len(fc_matrices)`),
    so re-running Stage 2 reloads the OLD features and the fix has no effect.
-   Delete `graph_feats_joint.npz` and `graph_feats_joint_age.npz` before any run.
 2. **Both `fmri_stage1_*.pt` encoders were trained on the old features.** They are
    now stale relative to the code. Loading them while computing new features is a
    train/inference mismatch. They need re-training whenever item 5 is settled —
    which is convenient, since item 5 likely requires re-pretraining anyway.
+
+> [!warning] Delete the caches **and** retrain, or neither — never just delete
+> An earlier draft of this section said to delete the caches "before any run".
+> Taken alone that is wrong, and it produces a worse failure than the one it
+> fixes. The three configurations:
+>
+> | features | encoder | verdict |
+> |---|---|---|
+> | old (cached) | trained on old | self-consistent — **valid**, with a methods caveat |
+> | new (cache deleted) | trained on old | **train/inference mismatch — invalid**, and silent |
+> | new | retrained on new | correct; needs the fMRI side to re-pretrain |
+>
+> Until the fMRI encoders are retrained, **keep the caches**. Runs made against
+> them are honest results under the pre-fix within-module degree z-score; say so
+> in the methods. The 2026-08-01 Stage-2 seed sweep was run this way.
 
 Confirmed unaffected by the upstream change: `FLUID_IQ_COL = '20016-2.0'`
 (item 4 stands), `BAD_FC_EIDS` (item 21 stands), and the detached `last_attn`
