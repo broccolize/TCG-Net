@@ -10,6 +10,72 @@ needs doing.
 
 ---
 
+## 2026-08-01 (late) — Calibration recovers the proteomics branch; ridge matches the age encoder
+
+### Age: the Stage-1 encoder does not beat ridge
+
+Ridge on the 2,920 z-scored proteins, alpha chosen on val, same split, test
+touched once (n=7,904):
+
+| model | R² | MAE | r |
+|---|---|---|---|
+| mean predictor | −0.0000 | 6.989 | — |
+| **ridge (all proteins)** | **0.8690** | 2.348 | 0.9322 |
+| ridge (top-200 by \|r\|) | 0.7677 | 3.136 | 0.8762 |
+| **Stage-1 encoder** | **0.868** | | |
+
+**0.8690 vs 0.868.** The SE-gated encoder and a closed-form linear model are
+indistinguishable. Age is linearly decodable from an Olink panel — a known
+property of plasma proteomic clocks — and R² 0.868 is a statement about the
+data, not the architecture. It cannot be reported as an architectural result.
+
+The top-200 row (0.7677) shows the signal is spread across many proteins rather
+than carried by a handful, which is worth a sentence of its own.
+
+### Fluid IQ: val-fitted calibration, 3 converged seeds
+
+| branch | raw R² | calibrated R² | Δ | fitted scale |
+|---|---|---|---|---|
+| fused | +0.0666 | **+0.0768** | +0.0102 | 0.867 |
+| fMRI-only | +0.0655 | +0.0669 | +0.0014 | 1.161 |
+| prot-only | +0.0007 | **+0.0294** | +0.0287 | 132.0 |
+| joint-head | +0.0647 | +0.0721 | +0.0074 | 0.884 |
+
+**The proteomics branch was amplitude-collapsed, and this proves it.** Calibrated
+prot-only scores **0.0294** against an r² ceiling of 0.0291–0.0299 — it recovers
+its ceiling to three decimals. Proteomics alone predicts instance-2 fluid IQ at
+R² ≈ 0.029 held-out. Every previous statement that the proteomics branch
+"contributes nothing" was reading an amplitude artefact, and the required scale
+factor of ~132 shows how extreme the collapse was.
+
+**The miscalibration runs in opposite directions, which was not what we
+predicted.** The fused head's fitted scale is **below** 1: its output spread
+(0.327–0.345) exceeds what its accuracy justifies (r·σ_t = 0.276–0.286), so it is
+over-*dispersed*, not over-shrunk. The fMRI branch is the opposite (scale 1.161).
+The r² − R² gap measures |miscalibration| and does not distinguish the two.
+
+Calibrated `fused − fMRI-only`: **+0.0099**, 3/3 seeds positive
+(+0.0103, +0.0163, +0.0032), t = +2.62 (df=2), p ≈ 0.12. Sign-consistent but the
+spread is 5× across three seeds. **Not yet reportable — needs more seeds.**
+
+### A statistics bug of our own making
+
+`summarise_stage2.py` counted deterministic re-runs of the same seed as
+independent, turning 3 runs into 6 and reporting `t=+2.17 (df=5)` for a contrast
+whose real figures are 2/3 signs and df=2. Now deduplicated on
+`(seed, best_epoch, test_r2, test_r2_fmri_only)`. The byte-identical re-run is a
+useful determinism check and is still listed — it is just not extra evidence.
+
+### Next
+
+`fusion/analysis/baseline_joint.py` (new) asks of the joint model what ridge just
+asked of the age encoder: ridge on 2,145 FC edges, on 2,920 proteins, and on the
+5,065-feature concatenation, over the same joint split. `ridge_concat` is naive
+early fusion with no gating and no learned representation. If it matches the
+Stage-2 fused row, the architecture is not what produces the result.
+
+---
+
 ## 2026-08-01 — Stage-2 multi-seed: the fusion null was a single-seed artefact
 
 > [!caution] SUPERSEDED the same day — every run below was undertrained
