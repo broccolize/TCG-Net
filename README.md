@@ -1,62 +1,97 @@
 # TCG-Net
 
-**TCG-Net** is a Two-branch Cooperative Game-Theoretic Network for individualised
-cognitive assessment using functional connectivity and plasma proteomics. It
-integrates resting-state fMRI functional connectomes and plasma proteomic
-profiles through a cooperative Shapley fusion mechanism to predict cognitive
-outcomes and provide individualised mechanistic interpretation.
+**TCG-Net** (Two-branch Cooperative Game-Theoretic Network) is a research
+implementation for cognitive assessment using plasma proteomics and
+resting-state fMRI functional connectivity. It combines modality embeddings
+through cooperative Shapley-guided fusion and exposes model-based modality
+contributions and interaction diagnostics.
 
-This repository is a monorepo. Each branch of the architecture lives in its
-own top-level folder so that the proteomics and fMRI sub-projects can be
-developed independently, then integrated at the fusion stage.
+The `main` branch contains proteomics, fMRI and fusion implementations.
+The project remains ongoing: code availability does not establish completed
+ablation studies, independently reproduced performance or clinical validity.
+The descriptions below inventory the source currently present; they do not
+add benchmark results or claim that a fresh end-to-end run has been verified.
 
-## Module structure
+## Implemented modules
 
-| Folder        | Contents                                                                                              |
-|---------------|-------------------------------------------------------------------------------------------------------|
-| `proteomics/` | The plasma-proteomics SE-MLP encoder, its preprocessing pipeline, training loops, and analysis tools. |
-| `fmri/`       | Reserved for the GCN-GAT functional-connectome encoder. Currently a placeholder.                      |
-| `fusion/`     | Reserved for the Cooperative Shapley Fusion Module. Joint work, populated after both encoders land.   |
-| `shared/`     | Reserved for utilities, configs, or preprocessing steps that are shared across the two branches.      |
+| Directory | Source currently present |
+|---|---|
+| [`proteomics/`](proteomics/README.md) | Squeeze-and-excitation MLP encoder, auxiliary regression head, preprocessing, target-dataset construction, Stage 1 training/cross-validation scripts, baseline and importance analysis, and shape checks. |
+| [`fmri/`](fmri/README.md) | Functional-connectivity preparation, GCN-GAT connectome encoder, graph-feature construction and Stage 1 training, plus alternative encoder/training scripts. |
+| [`fusion/`](fusion/README.md) | Joint proteomics-fMRI dataset construction, cooperative Shapley fusion and prediction heads, Stage 2 losses/training drivers, baseline comparisons and interpretation/summary scripts. |
+| [`shared/`](shared/README.md) | Documentation placeholder for a future shared utility package. It currently contains a README, not an implemented common-code package. |
 
-## Branching conventions
+### Code starting points
 
-Each module is developed on its own long-lived branch and merged into `main`
-once its encoder is stable. Pull requests should keep changes scoped to a
-single branch's folder.
+- **Proteomics encoder:** [`proteomics/models/encoder.py`](proteomics/models/encoder.py)
+  and [`se_block.py`](proteomics/models/se_block.py). The configured input has
+  2,920 features; the encoder exposes a 128-dimensional embedding and an SE
+  gate vector. See [`config.py`](proteomics/config.py) for current defaults.
+- **fMRI encoder:** [`fmri/Code/train_fmri_stage1.py`](fmri/Code/train_fmri_stage1.py)
+  defines `ConnectomeEncoder` using GCN/GAT layers and graph pooling.
+  [`FC_corr.py`](fmri/Code/FC_corr.py) prepares the connectivity inputs.
+- **Fusion:** [`fusion/models/shapley_fusion.py`](fusion/models/shapley_fusion.py)
+  defines `CooperativeShapleyFusion` and `FusionOutput`;
+  [`prediction_head.py`](fusion/models/prediction_head.py) maps the fused
+  representation to a prediction.
+- **Training:** [`fusion/training/train_stage2.py`](fusion/training/train_stage2.py)
+  uses the joint fluid-intelligence dataset; the separate
+  [`train_stage2_age.py`](fusion/training/train_stage2_age.py) driver uses the
+  joint age dataset. These scripts import both modality encoders.
+- **Data and analysis:** [`fusion/data/build_joint_dataset.py`](fusion/data/build_joint_dataset.py)
+  aligns participants across modalities. The `fusion/data/` and
+  `fusion/analysis/` directories also contain scaler checks, baseline,
+  phenotype-inspection and Shapley-analysis utilities.
 
-| Branch              | Owns               |
-|---------------------|--------------------|
-| `proteomics-encoder`| `proteomics/`      |
-| `fmri-encoder`      | `fmri/`            |
-| `shapley-fusion`    | `fusion/` (joint)  |
+The Shapley quantities describe the implemented prediction model. They should
+not be interpreted as established biological mechanisms or causal effects.
+Implementation-specific choices are documented in the source comments.
 
-The proteomics and fMRI branches are developed independently. The fusion
-branch is started only after both encoders have been merged into `main`,
-since it consumes `z_p` (proteomics embedding) and `z_f` (fMRI embedding)
-from the two upstream encoders.
-
-## Setup
+## Getting oriented
 
 ```bash
-git clone <repo-url> TCG-Net
+git clone https://github.com/broccolize/TCG-Net.git
 cd TCG-Net
 
-# Optional: create an isolated environment.
+# Optional isolated environment (Linux/macOS shell):
 python -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies for the branch you are working on; each module
-# documents its own requirements in its own README.
 ```
 
-The raw UK Biobank inputs are not included in the repository. They are
-expected to live at `../uk_BIOBANK_DATA/` (sibling to `TCG-Net/`) and are
-gitignored.
+There is no central pinned dependency manifest in this checkout. Depending on
+the script, imports include PyTorch, PyTorch Geometric, NumPy, SciPy, pandas,
+scikit-learn, h5py, NetworkX, joblib and tqdm. Check the selected entry point
+and use dependencies compatible with your platform; an exact reproducible
+training environment is not specified by this README.
 
-## Per-branch documentation
+### Data, paths and checkpoints
 
-- [`proteomics/README.md`](proteomics/README.md) — proteomics encoder contract, preprocessing, Stage 1 training.
-- [`fmri/README.md`](fmri/README.md) — fMRI connectome encoder placeholder.
-- [`fusion/README.md`](fusion/README.md) — Shapley fusion placeholder.
-- [`shared/README.md`](shared/README.md) — shared utilities placeholder.
+- Raw UK Biobank inputs are not supplied here. Running the data-dependent
+  workflow requires access to the relevant inputs and preprocessing artifacts.
+- Proteomics configuration derives raw-input paths from a sibling
+  `../uk_BIOBANK_DATA/` directory. See [`proteomics/config.py`](proteomics/config.py).
+- The same configuration defines `SHARED_DATA_DIR` for cross-modality tensors,
+  datasets and checkpoints. Set `TCGNET_SHARED_DATA` before starting a process
+  to override its current default, `/shared/tcgnet_data_2`.
+- This external shared-data directory is distinct from the repository's
+  `shared/` utility placeholder.
+- Some fMRI preparation/training scripts still contain absolute Linux paths.
+  Review their path constants and required files before running them; cloning
+  the repository alone does not configure the full pipeline.
+- Stage 2 expects compatible joint datasets, preprocessing artifacts and
+  pretrained encoder checkpoints. Review each training driver's filenames
+  and checkpoint-loading code before use.
+
+## Module documentation
+
+- [Proteomics guide](proteomics/README.md): encoder contract, preprocessing,
+  training commands and recorded experiment notes. Consult the current
+  configuration and source for paths and defaults.
+- [fMRI guide](fmri/README.md): implemented connectivity and encoder scripts,
+  inputs and path requirements.
+- [Fusion guide](fusion/README.md): implemented joint-data, model, training
+  and analysis components.
+- [Shared utilities placeholder](shared/README.md): planned common-code scope.
+
+Keep changes scoped to the relevant module. Historical branch names are not
+prerequisites for browsing the implementations already present on `main`.
